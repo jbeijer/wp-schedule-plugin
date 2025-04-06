@@ -1,0 +1,16 @@
+{
+    "adminTitle": "Schemaläggningshanterare (WP Schedule Plugin)",
+    "loading": "Laddar...",
+    "saving": "Sparar...",
+    "saveSuccess": "Sparades!",
+    "saveError": "Fel vid sparande",
+    "configError": "Fel: Konfigurationsdata saknas.",
+    "fetchError": "Fel vid hämtning",
+    "testApiButton": "Testa API",
+    "testApiResult": "API Testresultat",
+    "noData": "Ingen data.",
+    "organizations": "Organisationer",
+    "resources": "Resurser",
+    "members": "Medlemmar",
+    "schedule": "Schema"
+}
