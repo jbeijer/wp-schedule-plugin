@@ -1,0 +1,38 @@
+# Dependencies
+/node_modules
+/vendor
+
+# Build files
+/dist
+/build
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*~
+
+# WordPress specific (optional, but good practice in plugins)
+# wp-config.php should ideally live outside the plugin directory
+# wp-content/uploads/
+# wp-content/upgrade/
+# wp-content/backup-*/
+# wp-content/cache/
+
+# Composer
+composer.phar

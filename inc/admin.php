@@ -48,20 +48,25 @@ function enqueue_admin_assets(string $hook_suffix): void {
     );
 
     // Prepare data for the Svelte app
-    $localized_data = [
-        'apiUrl'      => \esc_url_raw( \get_rest_url( null, 'wp-schedule-plugin/v1/' ) ),
-        'nonce'       => \wp_create_nonce( 'wp_rest' ), // Use wp_rest nonce for REST API
+    // Prepare data using the standard wpApiSettings structure
+    // Get REST URL and log it for debugging
+    $rest_url_root = \get_rest_url();
+    error_log('WP Schedule Plugin: REST API Root URL: ' . $rest_url_root); // DEBUG
+
+    // Prepare data using the standard wpApiSettings structure
+    $api_settings = [
+        'root'        => \esc_url_raw( $rest_url_root ), // Use the fetched root URL
+        'nonce'       => \wp_create_nonce( 'wp_rest' ),
         'userLocale'  => \get_user_locale(),
-        'i18n'        => [], // Can add PHP-translated strings here if needed later
-        // Add other initial data if required by the app on load
-        // 'initialScheduleItems' => get_schedule_items(), // Example
+        // Add any other custom data needed by the app initially
+        // 'plugin_namespace' => 'wp-schedule-plugin/v1', // Could pass this if needed, but apiFetch path should handle it
     ];
 
-    // Localize the script with the data object
+    // Localize the script with the data object using the standard name
     \wp_localize_script(
         $script_handle,
-        'wpScheduleAdminData', // The JS object name
-        $localized_data
+        'wpApiSettings', // Standard object name for api-fetch
+        $api_settings
     );
 }
 

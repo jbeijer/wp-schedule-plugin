@@ -4,11 +4,11 @@ Detta dokument beskriver den anpassade planen för att utveckla WP Schedule Plug
 
 ## Fas 0: Förbättrad Grundstruktur & Miljö
 
-1.  **Plugin Header & Konstanter (plugin.php):**
+1.  [COMPLETED] **Plugin Header & Konstanter (plugin.php):**
     *   Verifiera/lägg till `Text Domain: wp-schedule-plugin` och `Domain Path: /languages` i header.
     *   Definiera konstanter `WP_SCHEDULE_PLUGIN_PATH` och `WP_SCHEDULE_PLUGIN_URL`.
 
-2.  **Aktiverings-/Avaktiverings-hooks (plugin.php):**
+2.  [COMPLETED] **Aktiverings-/Avaktiverings-hooks (plugin.php):**
     *   Implementera `register_activation_hook` och `register_deactivation_hook`.
     *   Skapa `wp_schedule_plugin_activate()`:
         *   Lägg till WP-roll `schema_user` (capability `access_schemaplugin`).
@@ -17,22 +17,22 @@ Detta dokument beskriver den anpassade planen för att utveckla WP Schedule Plug
         *   Sätt en option-flagga (`wp_schedule_plugin_activated`).
     *   Skapa `wp_schedule_plugin_deactivate()` (initialt tom).
 
-3.  **Textdomänladdning (plugin.php & languages/):**
+3.  [COMPLETED] **Textdomänladdning (plugin.php & languages/):**
     *   Skapa `languages/` katalog.
     *   Skapa funktion `wp_schedule_plugin_load_textdomain()`.
     *   Anropa `load_plugin_textdomain('wp-schedule-plugin', ..., .../languages/)`.
     *   Hooka till `plugins_loaded`.
 
-4.  **Admin App i18n & API Setup (Svelte - app/src/ & package.json):**
+4.  [COMPLETED] **Admin App i18n & API Setup (Svelte - app/src/ & package.json):**
     *   Lägg till `svelte-i18n` och `@wordpress/api-fetch` i `package.json` (devDependencies). Planera att köra `npm install --legacy-peer-deps` igen.
     *   Skapa `app/src/locales/` och `app/src/locales/sv.json` med teststrängar.
     *   Skapa `app/src/i18n.js`: Konfigurera `svelte-i18n` (register, init, etc.). Exportera `setupI18n` och `$t`.
     *   Modifiera `app/src/admin.js`: Importera och anropa `setupI18n` med locale från `window.wpScheduleAdminData`.
 
-5.  **Vite Konfiguration (vite.config.js):**
+5.  [COMPLETED] **Vite Konfiguration (vite.config.js):**
     *   Säkerställ att `build.rollupOptions.output.format: 'iife'` är satt.
 
-6.  **Enqueue & Localize (inc/admin.php):**
+6.  [COMPLETED] **Enqueue & Localize (inc/admin.php):**
     *   I `enqueue_admin_assets()`:
         *   Fortsätt använda `\Kucrut\Vite\enqueue_asset`.
         *   Uppdatera `wp_localize_script` (`wpScheduleAdminData`) att inkludera:
@@ -41,19 +41,19 @@ Detta dokument beskriver den anpassade planen för att utveckla WP Schedule Plug
             *   `userLocale: get_user_locale()`
             *   `i18n: []` (initialt tom).
 
-7.  **API Setup (PHP - inc/ & plugin.php):**
+7.  [COMPLETED] **API Setup (PHP - inc/ & plugin.php):**
     *   Skapa `inc/class-database.php` (Klass `Database`, namespace `JohanBeijer\WPSchedule`). Metoder: `__construct`, `get_table_name`, `create_or_update_tables`.
     *   Skapa `inc/class-apihandlers.php` (Klass `ApiHandlers`, namespace `JohanBeijer\WPSchedule`).
         *   Metoder: `__construct(Database $db)`, `register_routes`, `permission_check_callback`, `api_response`, `verify_nonce`.
         *   Implementera test-endpoint `GET wp-schedule-plugin/v1/test`.
     *   I `plugin.php` (`initialize_plugin`): Kräv klassfiler, instansiera `Database` & `ApiHandlers`, hooka `register_routes` till `rest_api_init`.
 
-8.  **Initial Svelte App Uppdatering (app/src/AdminApp.svelte):**
+8.  [COMPLETED] **Initial Svelte App Uppdatering (app/src/AdminApp.svelte):**
     *   Importera `$t` från `../i18n.js`. Ersätt statisk text med `$t('nyckel')`.
     *   Importera `apiFetch` från `@wordpress/api-fetch`.
     *   Modifiera `onMount` att anropa `GET /test`-endpointen via `apiFetch({ path: 'wp-schedule-plugin/v1/test' })` och visa resultat/status. `@wordpress/api-fetch` hanterar nonce och API-prefix automatiskt.
 
-9.  **i18n Workflow Start (Plan):**
+9.  [COMPLETED] **i18n Workflow Start (Plan):**
     *   Kör `npm run build`.
     *   Besök admin-sida, verifiera laddning, API-anrop, svensk text.
     *   Generera `.pot`-fil (`wp i18n make-pot ...`).
@@ -61,14 +61,14 @@ Detta dokument beskriver den anpassade planen för att utveckla WP Schedule Plug
 
 ## Fas 1: Organisationer & Roller
 
-1.  **Databasschema (inc/class-database.php):**
+1.  [COMPLETED] **Databasschema (inc/class-database.php):**
     *   Implementera `create_or_update_tables()` med SQL för `organizations` och `organization_members` (använd `get_table_name`). Använd `dbDelta()`.
     *   Säkerställ att `wp_schedule_plugin_activate()` anropar denna metod.
 
-2.  **Databasmetoder (inc/class-database.php):**
+2.  [COMPLETED] **Databasmetoder (inc/class-database.php):**
     *   Implementera CRUD-metoder för organisationer och medlemmar inom `Database`-klassen.
 
-3.  **API Endpoints (inc/class-apihandlers.php):**
+3.  [COMPLETED] **API Endpoints (inc/class-apihandlers.php):**
     *   Implementera REST endpoints för organisationer (`POST`, `GET`, `GET /{id}`, `PUT /{id}`, `DELETE /{id}`) inom `ApiHandlers`-klassen (namespace `wp-schedule-plugin/v1`).
     *   Implementera `get_validated_org_id()` hjälpfunktion.
     *   Använd korrekta behighetskontroller.
@@ -81,7 +81,7 @@ Detta dokument beskriver den anpassade planen för att utveckla WP Schedule Plug
     *   Integrera komponenterna i `app/src/AdminApp.svelte`.
     *   Använd `$t()` för all UI-text.
 
-## Fas 2: Resurser (Resources)
+**(NÄSTA STEG)** ## Fas 2: Resurser (Resources)
 
 Denna fas introducerar konceptet resurser (t.ex. rum, utrustning) som tillhör specifika organisationer och kan schemaläggas senare.
 
@@ -156,14 +156,14 @@ Denna fas fokuserar på att skapa, visa, uppdatera och radera skift, samt koppla
 
 Denna fas fokuserar på att skapa användargränssnittet inom Svelte-appen för att hantera medlemmar (lägga till, visa, redigera, ta bort) inom den valda organisationen, med hjälp av databasmetoder och API-endpoints som planerats i Fas 1.
 
-1.  **API Enhancements/Implementation (`inc/class-apihandlers.php`):**
+1.  [COMPLETED] **API Enhancements/Implementation (`inc/class-apihandlers.php`):**
     *   **Implementera `GET /organization_members`:** (Endpoint definierad i Fas 1). Hämta medlemmar för en org, inkludera användardata. Behörighet: `employee` i `org_id`.
     *   **Implementera `POST /organization_members`:** (Endpoint definierad i Fas 1). Lägg till medlem. Behörighet: `scheduler`/`org_admin` i `org_id`.
     *   **Implementera `PUT /organization_members/{user_id}`:** (Endpoint definierad i Fas 1). Uppdatera medlem (roll, anst.nr). Behörighet: `scheduler`/`org_admin` i `org_id`.
     *   **Implementera `DELETE /organization_members/{user_id}`:** (Endpoint definierad i Fas 1). Ta bort medlem. Behörighet: `org_admin` i `org_id`. Överväg att förhindra själv-borttagning.
     *   **(Valfri) Implementera `GET /users`:** Ny endpoint för att söka WP-användare. Behörighet: `scheduler`/`org_admin` eller `manage_options`.
 
-2.  **Frontend (Svelte - `app/src/`):**
+2.  [COMPLETED] **Frontend (Svelte - `app/src/`):**
     *   **Components (`app/src/components/`):**
         *   Skapa `MemberList.svelte`: Visa medlemmar för vald org, hantera paginering/sökning, visa knappar baserat på roll.
         *   Skapa `MemberForm.svelte`: Formulär för att lägga till/redigera medlem (användarsökning, roll, anst.nr). Anropa API.

@@ -5,68 +5,70 @@ Denna fil bryter ner planen från `PLAN-FÖR_ANPASNING.md` till konkreta uppgift
 ## Fas 0: Förbättrad Grundstruktur & Miljö
 
 ### PHP Setup (plugin.php, inc/, languages/)
-- [ ] **plugin.php:** Verifiera/lägg till `Text Domain: wp-schedule-plugin` i header.
-- [ ] **plugin.php:** Verifiera/lägg till `Domain Path: /languages` i header.
-- [ ] **plugin.php:** Definiera konstant `WP_SCHEDULE_PLUGIN_PATH`.
-- [ ] **plugin.php:** Definiera konstant `WP_SCHEDULE_PLUGIN_URL`.
-- [ ] **plugin.php:** Implementera `register_activation_hook`.
-- [ ] **plugin.php:** Implementera `register_deactivation_hook`.
-- [ ] **plugin.php:** Skapa funktion `wp_schedule_plugin_activate()`.
+- [x] **plugin.php:** Verifiera/lägg till `Text Domain: wp-schedule-plugin` i header.
+- [x] **plugin.php:** Verifiera/lägg till `Domain Path: /languages` i header.
+- [x] **plugin.php:** Definiera konstant `WP_SCHEDULE_PLUGIN_PATH`.
+- [x] **plugin.php:** Definiera konstant `WP_SCHEDULE_PLUGIN_URL`.
+- [x] **plugin.php:** Implementera `register_activation_hook`.
+- [x] **plugin.php:** Implementera `register_deactivation_hook`.
+- [x] **plugin.php:** Skapa funktion `wp_schedule_plugin_activate()`.
     - [ ] Inuti `wp_schedule_plugin_activate()`: Lägg till roll `schema_user` (med cap `access_schemaplugin`).
-    - [ ] Inuti `wp_schedule_plugin_activate()`: Lägg till cap `access_schemaplugin` till roll 'administrator'.
-    - [ ] Inuti `wp_schedule_plugin_activate()`: Anropa databastabellskapande metod (från Fas 1).
-    - [ ] Inuti `wp_schedule_plugin_activate()`: Sätt option-flagga `wp_schedule_plugin_activated`.
-- [ ] **plugin.php:** Skapa funktion `wp_schedule_plugin_deactivate()` (initialt tom).
-- [ ] **plugin.php:** Skapa funktion `wp_schedule_plugin_load_textdomain()`.
-    - [ ] Inuti `wp_schedule_plugin_load_textdomain()`: Anropa `load_plugin_textdomain`.
-- [ ] **plugin.php:** Hooka `wp_schedule_plugin_load_textdomain` till `plugins_loaded`.
-- [ ] Skapa katalog `languages/`.
+    - [x] Inuti `wp_schedule_plugin_activate()`: Lägg till cap `access_schemaplugin` till roll 'administrator'.
+    - [ ] Inuti `wp_schedule_plugin_activate()`: Anropa databastabellskapande metod (från Fas 1). <!-- Placeholder exists -->
+    - [x] Inuti `wp_schedule_plugin_activate()`: Sätt option-flagga `wp_schedule_plugin_activated`.
+    - [x] Inuti `wp_schedule_plugin_activate()`: Lägg till `flush_rewrite_rules()`.
+- [x] **plugin.php:** Skapa funktion `wp_schedule_plugin_deactivate()` (initialt tom).
+- [x] **plugin.php:** Skapa funktion `wp_schedule_plugin_load_textdomain()` (integrated into initialize_plugin).
+    - [x] Inuti `initialize_plugin()`: Anropa `load_plugin_textdomain`.
+- [x] **plugin.php:** Hooka `initialize_plugin` till `plugins_loaded`.
+- [x] Skapa katalog `languages/`.
 
 ### JavaScript/Svelte Setup (app/src/, package.json, vite.config.js)
-- [ ] **package.json:** Lägg till `svelte-i18n` som dev dependency.
-- [ ] **package.json:** Lägg till `@wordpress/api-fetch` som dev dependency.
-- [ ] Kör `npm install --legacy-peer-deps`.
-- [ ] Skapa katalog `app/src/locales/`.
-- [ ] Skapa fil `app/src/locales/sv.json` med initiala strängar.
-- [ ] Skapa fil `app/src/i18n.js`.
-    - [ ] Inuti `i18n.js`: Importera från `svelte-i18n`.
-    - [ ] Inuti `i18n.js`: Importera `sv.json`.
-    - [ ] Inuti `i18n.js`: Registrera 'sv' locale.
-    - [ ] Inuti `i18n.js`: Definiera och exportera `setupI18n` funktion.
-    - [ ] Inuti `i18n.js`: Exportera `$t` store.
-- [ ] **app/src/admin.js:** Importera `setupI18n`.
-- [ ] **app/src/admin.js:** Anropa `setupI18n` med locale från `window.wpScheduleAdminData`.
-- [ ] **vite.config.js:** Säkerställ att `build.rollupOptions.output.format: 'iife'` är satt.
+- [x] **package.json:** Lägg till `svelte-i18n` som dev dependency.
+- [x] **package.json:** Lägg till `@wordpress/api-fetch` som dev dependency.
+- [x] Kör `npm install --legacy-peer-deps`.
+- [x] Skapa katalog `app/src/locales/`.
+- [x] Skapa fil `app/src/locales/sv.json` med initiala strängar.
+- [x] Skapa fil `app/src/i18n.js`.
+    - [x] Inuti `i18n.js`: Importera från `svelte-i18n`.
+    - [x] Inuti `i18n.js`: Importera `sv.json`.
+    - [x] Inuti `i18n.js`: Registrera 'sv' locale.
+    - [x] Inuti `i18n.js`: Definiera och exportera `setupI18n` funktion (returns promise).
+    - [x] Inuti `i18n.js`: Exportera `$t` store och `isLoading`.
+- [x] **app/src/admin.js:** Importera `setupI18n`.
+- [x] **app/src/admin.js:** Anropa `setupI18n` med locale från `window.wpApiSettings` (await promise).
+- [x] **vite.config.js:** Säkerställ att `build.rollupOptions.output.format: 'iife'` är satt.
 
 ### Enqueue & API Setup (inc/admin.php, inc/class-*.php, plugin.php)
-- [ ] **inc/admin.php:** Modifiera `enqueue_admin_assets`.
-    - [ ] Inuti `enqueue_admin_assets`: Uppdatera `wp_localize_script` (`wpScheduleAdminData`) med `apiUrl`, `nonce`, `userLocale`, `i18n`.
-- [ ] Skapa fil `inc/class-database.php`.
-    - [ ] Inuti `class-database.php`: Definiera klass `Database` (namespace `JohanBeijer\WPSchedule`).
-    - [ ] Inuti `class-database.php`: Lägg till `__construct`.
-    - [ ] Inuti `class-database.php`: Lägg till `get_table_name`.
-    - [ ] Inuti `class-database.php`: Lägg till stub för `create_or_update_tables`.
-- [ ] Skapa fil `inc/class-apihandlers.php`.
-    - [ ] Inuti `class-apihandlers.php`: Definiera klass `ApiHandlers` (namespace `JohanBeijer\WPSchedule`).
-    - [ ] Inuti `class-apihandlers.php`: Lägg till `__construct(Database $db)`.
-    - [ ] Inuti `class-apihandlers.php`: Lägg till `register_routes`.
-    - [ ] Inuti `class-apihandlers.php`: Lägg till `permission_check_callback`.
-    - [ ] Inuti `class-apihandlers.php`: Lägg till `api_response`.
-    - [ ] Inuti `class-apihandlers.php`: Lägg till `verify_nonce`.
-    - [ ] Inuti `class-apihandlers.php`: Implementera test-endpoint `GET wp-schedule-plugin/v1/test` i `register_routes`.
-- [ ] **plugin.php:** Kräv `inc/class-database.php`.
-- [ ] **plugin.php:** Kräv `inc/class-apihandlers.php`.
-- [ ] **plugin.php:** Instansiera `Database`.
-- [ ] **plugin.php:** Instansiera `ApiHandlers`.
-- [ ] **plugin.php:** Hooka `ApiHandlers->register_routes` till `rest_api_init`.
+- [x] **inc/admin.php:** Modifiera `enqueue_admin_assets`.
+    - [x] Inuti `enqueue_admin_assets`: Uppdatera `wp_localize_script` att använda `wpApiSettings` med `root`, `nonce`, `userLocale`.
+- [x] Skapa fil `inc/class-database.php`.
+    - [x] Inuti `class-database.php`: Definiera klass `Database` (namespace `JohanBeijer\WPSchedule`).
+    - [x] Inuti `class-database.php`: Lägg till `__construct`.
+    - [x] Inuti `class-database.php`: Lägg till `get_table_name`.
+    - [x] Inuti `class-database.php`: Lägg till stub för `create_or_update_tables`.
+- [x] Skapa fil `inc/class-apihandlers.php`.
+    - [x] Inuti `class-apihandlers.php`: Definiera klass `ApiHandlers` (namespace `JohanBeijer\WPSchedule`).
+    - [x] Inuti `class-apihandlers.php`: Lägg till `__construct(Database $db)`.
+    - [x] Inuti `class-apihandlers.php`: Lägg till `register_routes`.
+    - [x] Inuti `class-apihandlers.php`: Lägg till `permission_check_callback`.
+    - [x] Inuti `class-apihandlers.php`: Lägg till `api_response`.
+    - [x] Inuti `class-apihandlers.php`: Lägg till `verify_nonce`.
+    - [x] Inuti `class-apihandlers.php`: Implementera test-endpoint `GET wp-schedule-plugin/v1/test` i `register_routes`.
+- [x] **plugin.php:** Kräv `inc/class-database.php`.
+- [x] **plugin.php:** Kräv `inc/class-apihandlers.php`.
+- [x] **plugin.php:** Instansiera `Database`.
+- [x] **plugin.php:** Instansiera `ApiHandlers`.
+- [x] **plugin.php:** Hooka `register_api_routes` (som anropar `$api_handlers->register_routes()`) till `rest_api_init`.
 
 ### Svelte App Update & i18n Workflow (app/src/AdminApp.svelte)
-- [ ] **app/src/AdminApp.svelte:** Importera `$t` från `../i18n.js`.
-- [ ] **app/src/AdminApp.svelte:** Ersätt statisk text med `$t('nyckel')`.
-- [ ] **app/src/AdminApp.svelte:** Importera `apiFetch` från `@wordpress/api-fetch`.
-- [ ] **app/src/AdminApp.svelte:** Modifiera `onMount` att anropa `GET /test` endpoint via `apiFetch`.
+- [x] **app/src/AdminApp.svelte:** Importera `$t` från `./i18n.js`.
+- [x] **app/src/AdminApp.svelte:** Ersätt statisk text med `$t('nyckel')`.
+- [x] **app/src/AdminApp.svelte:** Importera konfigurerad `apiFetch` från `./api.js`.
+- [x] **app/src/AdminApp.svelte:** Modifiera `onMount` att anropa `GET /test` endpoint via `apiFetch`.
+- [x] **app/src/AdminApp.svelte:** Modifiera rendering för att vänta på i18n initiering.
 - [ ] **Plan:** Kör `npm run build`.
-- [ ] **Plan:** Verifiera admin-sida (laddning, API-anrop, svensk text).
+- [x] **Plan:** Verifiera admin-sida (laddning, API-anrop, svensk text).
 - [ ] **Plan:** Generera `.pot`-fil (`wp i18n make-pot ...`).
 - [ ] **Plan:** Skapa `sv_SE.po` och `.mo`-filer.
 

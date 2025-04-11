@@ -1,4 +1,4 @@
-nimport { v4wp } from "@kucrut/vite-for-wp";
+import { v4wp } from "@kucrut/vite-for-wp";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 export default {

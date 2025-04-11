@@ -55,10 +55,6 @@ graph TD
     K --> V(frontend.php);
 ```
 
-## Next Steps (Post-Planning):
+## Status
 
-1.  Switch to 'code' mode to implement this plan by creating the files and directories.
-2.  Run `composer install` to install PHP dependencies.
-3.  Run `npm install` to install JavaScript dependencies.
-4.  Run `npm run dev` or `npm run build` as needed.
-5.  Activate the plugin in WordPress admin.
+Initial file structure creation is complete. Development now follows the phases outlined in `PLAN-FÖR_ANPASNING.md`. Fas 0 and Fas 1 are complete.

@@ -1,20 +1,27 @@
 <script>
     import { onMount } from 'svelte';
-    import apiFetch from '@wordpress/api-fetch';
+    import apiFetch from './api.js'; // Import configured apiFetch instance
     import { t, isLoading as i18nIsLoading } from './i18n.js'; // Import translation function and loading state
 
-    import ScheduleComponent from "./lib/ScheduleComponent.svelte";
-
+    // Import the new component
+    import OrganizationManager from './lib/OrganizationManager.svelte';
+    import MemberManager from './lib/MemberManager.svelte'; // Import MemberManager
+    import ResourceList from './lib/ResourceList.svelte'; // Import ResourceList
+    import ResourceForm from './lib/ResourceForm.svelte'; // Import ResourceForm
+    // import ScheduleComponent from "./lib/ScheduleComponent.svelte";
     // Reactive state variables
-    let scheduleItems = []; // Placeholder for actual data later
+    // let scheduleItems = []; // No longer needed directly here
     let statusMessage = '';
-    let isLoading = true; // Start as true until mount check completes
-    let initialLoadComplete = false; // Flag to track if initial data load attempt finished
-    let testApiResult = null; // To store result from test API call
+    let isLoading = true; // Still useful for overall loading state
+    let initialLoadComplete = false;
+    let testApiResult = null;
+    let selectedOrgId = null; // To track which org is selected
+    let showResourceForm = false; // Control visibility of the resource form
+    let resourceToEdit = null; // Holds the resource object for editing, or null for adding
+    let resourceListKey = 0; // Key to force ResourceList refresh
 
     // Define types based on vite-env.d.ts for better type safety
-    /** @type {import('../../vite-env').WpScheduleAdminData | undefined} */
-    let adminData;
+    // let adminData; // No longer needed directly, apiFetch uses wpApiSettings
 
     // Function to test the API endpoint
     async function testApiCall() {
@@ -22,7 +29,7 @@
         statusMessage = $t('loading'); // Use translated string
         testApiResult = null;
         try {
-            const response = await apiFetch({ path: 'wp-schedule-plugin/v1/test' });
+            const response = await apiFetch({ path: 'wp-schedule-plugin/v1/test' }); // Removed leading slash
             testApiResult = response; // Store the successful response
             statusMessage = `${$t('testApiResult')}: ${JSON.stringify(response)}`;
             console.log('API Test Success:', response);
@@ -38,27 +45,16 @@
     }
 
     onMount(() => {
-        // Check if the global variable exists and has necessary data
-        if (typeof window !== 'undefined' && typeof window.wpScheduleAdminData !== 'undefined') {
-            adminData = window.wpScheduleAdminData;
-            // Nonce & apiUrl are handled by apiFetch automatically if localized correctly
+        // Nonce & apiUrl are handled by apiFetch automatically via wpApiSettings
 
-            // Placeholder: Load initial data if needed (e.g., organizations)
-            // scheduleItems = adminData.initialScheduleItems || [];
-            // Initial load attempt is done, even if testApiCall starts loading again
-            initialLoadComplete = true;
-            isLoading = false; // Temporarily set to false before API call
+        // No initial data load needed here anymore, OrganizationManager handles its own
+        // Initial load attempt is done, even if testApiCall starts loading again
+        initialLoadComplete = true;
+        isLoading = false; // Set loading to false initially
 
-            // Perform the test API call on mount
-            testApiCall(); // This will set isLoading=true again
-
-        } else {
-            console.error('wpScheduleAdminData is not defined on window or missing required properties.');
-            statusMessage = $t('configError'); // Use translated string
-            isLoading = false; // Loading finished (with error)
-            initialLoadComplete = true;
-        }
-    });
+        // Test API call can still be useful for debugging
+        // testApiCall();
+       });
 
     // Placeholder for future save/update logic using apiFetch
     // async function saveSomething(data) {
@@ -86,6 +82,55 @@
     //     // saveSomething(data);
     // }
 
+    // --- Resource Management Handlers ---
+
+    function handleAddResourceClick() {
+        resourceToEdit = null;
+        showResourceForm = true;
+    }
+
+    function handleEditResource(event) {
+        resourceToEdit = event.detail;
+        showResourceForm = true;
+    }
+
+    async function handleDeleteResource(event) {
+        const resource = event.detail;
+        if (confirm($t('confirmDeleteResource', { name: resource.name }))) {
+            isLoading = true;
+            statusMessage = $t('loading');
+            try {
+                await apiFetch({
+                    path: `wp-schedule-plugin/v1/resources/${resource.id}`,
+                    method: 'DELETE',
+                });
+                statusMessage = $t('resourceDeleteSuccess');
+                resourceListKey++; // Force refresh
+            } catch (error) {
+                statusMessage = `${$t('resourceDeleteFailed')}: ${error.message}`;
+                console.error('Resource Delete Error:', error);
+            } finally {
+                isLoading = false;
+                // Clear message after delay?
+                setTimeout(() => { if (statusMessage === $t('resourceDeleteSuccess')) statusMessage = ''; }, 3000);
+            }
+        }
+    }
+
+    function handleResourceSaveSuccess() {
+        showResourceForm = false;
+        resourceToEdit = null;
+        resourceListKey++; // Force refresh
+        // Status message is handled within ResourceForm, but we could add one here too
+        // statusMessage = resourceToEdit ? $t('resourceUpdateSuccess') : $t('resourceCreateSuccess');
+        // setTimeout(() => { statusMessage = ''; }, 3000);
+    }
+
+    function handleResourceCancel() {
+        showResourceForm = false;
+        resourceToEdit = null;
+    }
+
 </script>
 
     <div class="wp-schedule-admin-container">
@@ -105,17 +150,61 @@
         {/if}
 
         <!-- Show main content area after initial load attempt, even if subsequent loads happen -->
-        {#if initialLoadComplete}
-            <!-- Example Button to re-run test -->
-            <button on:click={testApiCall} disabled={isLoading}>{$t('testApiButton')}</button>
+        {#if initialLoadComplete && !$i18nIsLoading}
+        	<!-- Example Button to re-run test -->
+        	<button on:click={testApiCall} disabled={isLoading}>{$t('testApiButton')}</button>
+      
+        	<hr>
+      
+        	<!-- Organization Management Section -->
+        	<OrganizationManager bind:selectedOrgId />
+      
+        	<hr>
+      
+        	<!-- Member Management Section (Placeholder for now) -->
+        	{#if selectedOrgId}
+        		<h2>{$t('manageMembersForOrg', { id: selectedOrgId })}</h2>
+        		<!-- Render MemberManager when an org is selected -->
+        		<MemberManager orgId={selectedOrgId} />
+        	{:else}
+        		<p>{$t('selectOrgToManageMembers')}</p>
+        	{/if}
 
-            <!-- Render the component -->
-            <!-- This ScheduleComponent is now just a placeholder visually -->
-            <!-- We will replace/remove this in later phases -->
-            <ScheduleComponent
-                data={{ events: scheduleItems, settings: {} }}
-                isAdmin={true}
-            />
+        	   <hr>
+
+        	   <!-- Resource Management Section -->
+        	   {#if selectedOrgId}
+        	       <h2>{$t('manageResources')}</h2>
+
+        	       {#if showResourceForm}
+        	           <!-- Resource Form (Add/Edit) -->
+        	           <ResourceForm
+        	               orgId={selectedOrgId}
+        	               resource={resourceToEdit}
+        	               on:saveSuccess={handleResourceSaveSuccess}
+        	               on:cancel={handleResourceCancel}
+        	           />
+        	           <hr> <!-- Add separator when form is shown -->
+        	       {:else}
+        	           <!-- Add Resource Button -->
+        	           <button on:click={handleAddResourceClick}>{$t('addResource')}</button>
+
+        	           <!-- Resource List -->
+        	           <ResourceList
+        	               orgId={selectedOrgId}
+        	               on:editResource={handleEditResource}
+        	               on:deleteResource={handleDeleteResource}
+        	           />
+        	       {/if}
+
+        	   {:else}
+        	       <!-- Optionally show a message if no org is selected for resources -->
+        	       <!-- <p>Välj en organisation för att hantera resurser.</p> -->
+        	   {/if}
+
+        	<!-- ScheduleComponent might be used later for actual scheduling view -->
+        	<!-- <ScheduleComponent ... /> -->
+
         {/if}
 
     </div>

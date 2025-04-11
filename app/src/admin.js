@@ -5,7 +5,7 @@ import "./app.css";
 // Function to initialize and mount the app
 async function initializeApp() {
     // Extract locale from localized data (e.g., 'sv' from 'sv_SE')
-    const userLocale = window.wpScheduleAdminData?.userLocale?.split('_')[0] || 'sv';
+    const userLocale = window.wpApiSettings?.userLocale?.split('_')[0] || 'sv'; // Read from wpApiSettings
 
     try {
         // Initialize i18n and wait for it to load the locale
