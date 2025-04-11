@@ -50,6 +50,21 @@ class Database {
 		$charset_collate = $this->wpdb->get_charset_collate();
 		$sqls = [];
 
+		// --- NEW: Org Permissions Table for plugin roles ---
+		$table_org_permissions = $this->get_table_name('plugin_org_permissions');
+		$sqls[] = "CREATE TABLE {$table_org_permissions} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			user_id bigint(20) unsigned NOT NULL,
+			org_id bigint(20) unsigned NOT NULL,
+			plugin_role varchar(64) NOT NULL,
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY  (id),
+			UNIQUE KEY user_org_role (user_id, org_id, plugin_role),
+			KEY user_id (user_id),
+			KEY org_id (org_id),
+			KEY plugin_role (plugin_role)
+		) $charset_collate;";
+
 		// Organizations Table
 		$table_organizations = $this->get_table_name('organizations');
 		$sqls[] = "CREATE TABLE {$table_organizations} (
@@ -133,6 +148,334 @@ class Database {
 		// if (!empty($EZSQL_ERROR)) {
 		//     error_log('dbDelta errors: ' . print_r($EZSQL_ERROR, true));
 		// }
+		// Add foreign key for resources.org_id -> organizations.org_id (after dbDelta)
+		// dbDelta does not reliably add FKs, so we do it here (safe to run repeatedly)
+		$resources_table = $this->get_table_name('resources');
+		$organizations_table = $this->get_table_name('organizations');
+		$fk_name = 'fk_resources_org_id';
+		$fk_exists = $this->wpdb->get_var(
+			"SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+			 WHERE TABLE_NAME = '{$resources_table}'
+			 AND CONSTRAINT_NAME = '{$fk_name}'"
+		);
+		if (!$fk_exists) {
+			// Suppress errors if already exists
+			$this->wpdb->query(
+				"ALTER TABLE {$resources_table}
+				 ADD CONSTRAINT {$fk_name}
+				 FOREIGN KEY (org_id) REFERENCES {$organizations_table}(org_id)
+				 ON DELETE CASCADE"
+			);
+		}
+		// Add foreign keys for shifts table (after dbDelta)
+		$shifts_table = $this->get_table_name('shifts');
+		$resources_table = $this->get_table_name('resources');
+		$users_table = $this->wpdb->prefix . 'users';
+
+		// org_id -> organizations(org_id) ON DELETE CASCADE
+		$fk_name = 'fk_shifts_org_id';
+		$fk_exists = $this->wpdb->get_var(
+			"SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+			 WHERE TABLE_NAME = '{$shifts_table}'
+			 AND CONSTRAINT_NAME = '{$fk_name}'"
+		);
+		if (!$fk_exists) {
+			$this->wpdb->query(
+				"ALTER TABLE {$shifts_table}
+				 ADD CONSTRAINT {$fk_name}
+				 FOREIGN KEY (org_id) REFERENCES {$organizations_table}(org_id)
+				 ON DELETE CASCADE"
+			);
+		}
+
+		// resource_id -> resources(resource_id) ON DELETE SET NULL
+		$fk_name = 'fk_shifts_resource_id';
+		$fk_exists = $this->wpdb->get_var(
+			"SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+			 WHERE TABLE_NAME = '{$shifts_table}'
+			 AND CONSTRAINT_NAME = '{$fk_name}'"
+		);
+		if (!$fk_exists) {
+			$this->wpdb->query(
+				"ALTER TABLE {$shifts_table}
+				 ADD CONSTRAINT {$fk_name}
+				 FOREIGN KEY (resource_id) REFERENCES {$resources_table}(resource_id)
+				 ON DELETE SET NULL"
+			);
+		}
+
+		// user_id -> users(ID) ON DELETE SET NULL
+		$fk_name = 'fk_shifts_user_id';
+		$fk_exists = $this->wpdb->get_var(
+			"SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+			 WHERE TABLE_NAME = '{$shifts_table}'
+			 AND CONSTRAINT_NAME = '{$fk_name}'"
+		);
+		if (!$fk_exists) {
+			$this->wpdb->query(
+				"ALTER TABLE {$shifts_table}
+				 ADD CONSTRAINT {$fk_name}
+				 FOREIGN KEY (user_id) REFERENCES {$users_table}(ID)
+				 ON DELETE SET NULL"
+			);
+		}
+	}
+
+	// --- Shift Methods (Fas 3) ---
+
+	/**
+	 * Creates a new shift.
+	 *
+	 * @param int    $org_id      The organization ID.
+	 * @param string $start_time  Shift start time (Y-m-d H:i:s).
+	 * @param string $end_time    Shift end time (Y-m-d H:i:s).
+	 * @param array  $data        Optional: resource_id, user_id, title, notes, status.
+	 * @return int|false          The new shift ID on success, false on failure.
+	 */
+	public function create_shift( int $org_id, string $start_time, string $end_time, array $data = [] ) {
+		$table = $this->get_table_name('shifts');
+		$org_id = \absint($org_id);
+
+		// Validate required fields
+		if ( $org_id <= 0 || empty($start_time) || empty($end_time) ) {
+			return false;
+		}
+
+		$insert = [
+			'org_id'     => $org_id,
+			'start_time' => $start_time,
+			'end_time'   => $end_time,
+		];
+		$formats = [ '%d', '%s', '%s' ];
+
+		// Optional fields
+		if ( isset($data['resource_id']) ) {
+			$insert['resource_id'] = $data['resource_id'] !== null ? \absint($data['resource_id']) : null;
+			$formats[] = $insert['resource_id'] !== null ? '%d' : null;
+		}
+		if ( isset($data['user_id']) ) {
+			$insert['user_id'] = $data['user_id'] !== null ? \absint($data['user_id']) : null;
+			$formats[] = $insert['user_id'] !== null ? '%d' : null;
+		}
+		if ( isset($data['title']) ) {
+			$insert['title'] = \sanitize_text_field($data['title']);
+			$formats[] = '%s';
+		}
+		if ( isset($data['notes']) ) {
+			$insert['notes'] = $data['notes']; // Allow HTML if needed, or sanitize as desired
+			$formats[] = '%s';
+		}
+		if ( isset($data['status']) ) {
+			$allowed = [ 'pending', 'confirmed', 'cancelled' ];
+			$status = strtolower( $data['status'] );
+			$insert['status'] = in_array( $status, $allowed, true ) ? $status : 'pending';
+			$formats[] = '%s';
+		}
+
+		$result = $this->wpdb->insert( $table, $insert, $formats );
+		if ( $result === false ) {
+			error_log( "WP Schedule Plugin: Failed to insert shift. DB Error: " . $this->wpdb->last_error );
+			return false;
+		}
+		return $this->wpdb->insert_id;
+	}
+
+	/**
+	 * Retrieves a single shift by its ID.
+	 *
+	 * @param int $shift_id The shift ID.
+	 * @return object|null  The shift object or null if not found.
+	 */
+	public function get_shift( int $shift_id ): ?object {
+		$table = $this->get_table_name('shifts');
+		$shift_id = \absint($shift_id);
+		if ( $shift_id <= 0 ) {
+			return null;
+		}
+		$sql = $this->wpdb->prepare(
+			"SELECT * FROM {$table} WHERE shift_id = %d",
+			$shift_id
+		);
+		$shift = $this->wpdb->get_row( $sql );
+		return $shift ?: null;
+	}
+
+	/**
+	 * Retrieves multiple shifts with optional filtering.
+	 *
+	 * @param array $args Optional filters: org_id, resource_id, user_id, status, start_after, end_before.
+	 * @return array      Array of shift objects.
+	 */
+	public function get_shifts( array $args = [] ): array {
+		$table = $this->get_table_name('shifts');
+		$where = [];
+		$params = [];
+
+		if ( isset($args['org_id']) ) {
+			$where[] = 'org_id = %d';
+			$params[] = \absint($args['org_id']);
+		}
+		if ( isset($args['resource_id']) ) {
+			$where[] = 'resource_id = %d';
+			$params[] = \absint($args['resource_id']);
+		}
+		if ( isset($args['user_id']) ) {
+			$where[] = 'user_id = %d';
+			$params[] = \absint($args['user_id']);
+		}
+		if ( isset($args['status']) ) {
+			$where[] = 'status = %s';
+			$params[] = $args['status'];
+		}
+		if ( isset($args['start_after']) ) {
+			$where[] = 'start_time >= %s';
+			$params[] = $args['start_after'];
+		}
+		if ( isset($args['end_before']) ) {
+			$where[] = 'end_time <= %s';
+			$params[] = $args['end_before'];
+		}
+
+		$sql = "SELECT * FROM {$table}";
+		if ( $where ) {
+			$sql .= ' WHERE ' . implode(' AND ', $where);
+		}
+		$sql .= ' ORDER BY start_time ASC';
+
+		// Pagination support: limit/number and offset
+		$limit = null;
+		$offset = 0;
+		if ( isset($args['limit']) ) {
+			$limit = \absint($args['limit']);
+		} elseif ( isset($args['number']) ) {
+			$limit = \absint($args['number']);
+		}
+		if ( isset($args['offset']) ) {
+			$offset = \absint($args['offset']);
+		}
+		if ( $limit !== null ) {
+			$sql .= $this->wpdb->prepare(' LIMIT %d OFFSET %d', $limit, $offset);
+		}
+
+		$prepared = $this->wpdb->prepare( $sql, $params );
+		$results = $this->wpdb->get_results( $prepared );
+		return is_array($results) ? $results : [];
+	}
+
+	/**
+	 * Updates an existing shift.
+	 *
+	 * @param int   $shift_id The shift ID.
+	 * @param array $data     Associative array of fields to update.
+	 * @return bool           True on success, false on failure.
+	 */
+	public function update_shift( int $shift_id, array $data ): bool {
+		$table = $this->get_table_name('shifts');
+		$shift_id = \absint($shift_id);
+		if ( $shift_id <= 0 ) {
+			return false;
+		}
+
+		$update = [];
+		$formats = [];
+
+		if ( isset($data['org_id']) ) {
+			$update['org_id'] = \absint($data['org_id']);
+			$formats[] = '%d';
+		}
+		if ( array_key_exists('resource_id', $data) ) {
+			$update['resource_id'] = $data['resource_id'] !== null ? \absint($data['resource_id']) : null;
+			$formats[] = $update['resource_id'] !== null ? '%d' : null;
+		}
+		if ( array_key_exists('user_id', $data) ) {
+			$update['user_id'] = $data['user_id'] !== null ? \absint($data['user_id']) : null;
+			$formats[] = $update['user_id'] !== null ? '%d' : null;
+		}
+		if ( isset($data['start_time']) ) {
+			$update['start_time'] = $data['start_time'];
+			$formats[] = '%s';
+		}
+		if ( isset($data['end_time']) ) {
+			$update['end_time'] = $data['end_time'];
+			$formats[] = '%s';
+		}
+		if ( isset($data['title']) ) {
+			$update['title'] = \sanitize_text_field($data['title']);
+			$formats[] = '%s';
+		}
+		if ( isset($data['notes']) ) {
+			$update['notes'] = $data['notes'];
+			$formats[] = '%s';
+		}
+		if ( isset($data['status']) ) {
+			$allowed = [ 'pending', 'confirmed', 'cancelled' ];
+			$status = strtolower( $data['status'] );
+			$update['status'] = in_array( $status, $allowed, true ) ? $status : 'pending';
+			$formats[] = '%s';
+		}
+
+		if ( empty($update) ) {
+			return false;
+		}
+
+		$result = $this->wpdb->update(
+			$table,
+			$update,
+			[ 'shift_id' => $shift_id ],
+			$formats,
+			[ '%d' ]
+		);
+		if ( $result === false ) {
+			error_log( "WP Schedule Plugin: Failed to update shift ID {$shift_id}. DB Error: " . $this->wpdb->last_error );
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Deletes a shift.
+	 *
+	 * @param int $shift_id The shift ID.
+	 * @return bool         True on success, false on failure.
+	 */
+	public function delete_shift( int $shift_id ): bool {
+		$table = $this->get_table_name('shifts');
+		$shift_id = \absint($shift_id);
+		if ( $shift_id <= 0 ) {
+			return false;
+		}
+		$result = $this->wpdb->delete(
+			$table,
+			[ 'shift_id' => $shift_id ],
+			[ '%d' ]
+		);
+		if ( $result === false ) {
+			error_log( "WP Schedule Plugin: Failed to delete shift ID {$shift_id}. DB Error: " . $this->wpdb->last_error );
+			return false;
+		}
+		return true;
+	}
+
+	// --- Resource Methods (Fas 2) ---
+
+	/**
+	 * Creates a new resource.
+	 *
+	 * @param int    $org_id The organization ID this resource belongs to.
+	 * @param string $name   The name of the resource.
+	 * @param array  $data   Optional additional fields: description, type, capacity, is_active.
+	 * @return int|false     The new resource ID on success, false on failure.
+
+	/**
+	 * (Optional) Retrieves all resources for a given organization.
+	 *
+	 * @param int   $org_id The organization ID.
+	 * @param array $args   Additional filters (type, is_active).
+	 * @return array        Array of resource objects.
+	 */
+	public function get_organization_resources( int $org_id, array $args = [] ): array {
+		$args['org_id'] = $org_id;
+		return $this->get_resources($args);
 	}
 
 	// --- Organization Methods (Fas 1) ---
@@ -220,8 +563,22 @@ class Database {
 	public function get_organizations( array $args = [] ): array {
 		$table_name = $this->get_table_name('organizations');
 
-		// Basic query for now, add filtering later based on $args
 		$sql = "SELECT * FROM {$table_name} ORDER BY name ASC";
+
+		// Pagination support: limit/number and offset
+		$limit = null;
+		$offset = 0;
+		if ( isset($args['limit']) ) {
+			$limit = \absint($args['limit']);
+		} elseif ( isset($args['number']) ) {
+			$limit = \absint($args['number']);
+		}
+		if ( isset($args['offset']) ) {
+			$offset = \absint($args['offset']);
+		}
+		if ( $limit !== null ) {
+			$sql .= $this->wpdb->prepare(' LIMIT %d OFFSET %d', $limit, $offset);
+		}
 
 		$organizations = $this->wpdb->get_results( $sql );
 
@@ -597,68 +954,6 @@ class Database {
 
 	// --- Resource Methods (Fas 2) ---
 
-	/**
-	 * Creates a new resource associated with an organization.
-	 *
-	 * @param int    $org_id The ID of the organization the resource belongs to.
-	 * @param string $name   The name of the resource.
-	 * @param array  $data   Optional additional data for the resource:
-	 *                       - 'description' (string)
-	 *                       - 'type' (string)
-	 *                       - 'capacity' (int)
-	 *                       - 'is_active' (bool)
-	 * @return int|false The new resource ID on success, false on failure.
-	 */
-	public function create_resource( int $org_id, string $name, array $data = [] ): int|false {
-		$table_name = $this->get_table_name('resources');
-		$org_id = \absint( $org_id );
-
-		// Validate required fields
-		$name = \sanitize_text_field( trim( $name ) );
-		if ( $org_id <= 0 || empty( $name ) ) {
-			error_log( "WP Schedule Plugin: Invalid org_id ({$org_id}) or empty name provided for create_resource." );
-			return false;
-		}
-
-		// Prepare base data and format
-		$insert_data = [
-			'org_id' => $org_id,
-			'name'   => $name,
-		];
-		$format = [ '%d', '%s' ];
-
-		// Process optional data
-		if ( isset( $data['description'] ) ) {
-			$insert_data['description'] = \sanitize_textarea_field( $data['description'] );
-			$format[] = '%s';
-		}
-		if ( isset( $data['type'] ) ) {
-			$insert_data['type'] = \sanitize_key( $data['type'] ); // Use sanitize_key for simple types/slugs
-			$format[] = '%s';
-		}
-		if ( isset( $data['capacity'] ) ) {
-			$capacity = \absint( $data['capacity'] );
-			if ($capacity > 0) { // Only store positive capacity
-				$insert_data['capacity'] = $capacity;
-				$format[] = '%d';
-			}
-		}
-		if ( isset( $data['is_active'] ) ) {
-			$insert_data['is_active'] = \boolval( $data['is_active'] ) ? 1 : 0; // Store as 1 or 0
-			$format[] = '%d';
-		}
-		// Note: created_at and updated_at are handled by DB defaults
-
-		// Insert into database
-		$result = $this->wpdb->insert( $table_name, $insert_data, $format );
-
-		if ( $result === false ) {
-			error_log( "WP Schedule Plugin: Failed to insert resource '{$name}' for org {$org_id}. DB Error: " . $this->wpdb->last_error );
-			return false;
-		}
-
-		return $this->wpdb->insert_id; // Return the new resource_id
-	}
 
 	/**
 	 * Retrieves a single resource by its ID.
@@ -897,403 +1192,115 @@ public function delete_resource( int $resource_id ): bool {
 
 	// --- Shift Methods (Fas 3) ---
 
+	// --- Plugin Org Permissions Methods ---
+
 	/**
-	 * Creates a new shift record.
+	 * Assign a plugin role to a user in an organization.
+	 * Only assign if user has WP role "schema user".
 	 *
-	 * @param int    $org_id     The ID of the organization the shift belongs to.
-	 * @param string $start_time The start date/time string (e.g., 'YYYY-MM-DD HH:MM:SS').
-	 * @param string $end_time   The end date/time string (e.g., 'YYYY-MM-DD HH:MM:SS').
-	 * @param array  $data       Optional additional data for the shift:
-	 *                           - 'resource_id' (int)
-	 *                           - 'user_id' (int)
-	 *                           - 'title' (string)
-	 *                           - 'notes' (string)
-	 *                           - 'status' (string - 'pending', 'confirmed', 'cancelled')
-	 * @return int|false The new shift ID on success, false on failure.
+	 * @param int $user_id
+	 * @param int $org_id
+	 * @param string $plugin_role
+	 * @return bool True on success, false on failure.
 	 */
-	public function create_shift( int $org_id, string $start_time, string $end_time, array $data = [] ): int|false {
-		// 1. Validate required parameters
-		$org_id = \absint( $org_id );
-		if ( $org_id <= 0 ) {
-			error_log( "WP Schedule Plugin: Invalid org_id ({$org_id}) provided for create_shift." );
+	public function add_org_permission(int $user_id, int $org_id, string $plugin_role): bool {
+		$user_id = \absint($user_id);
+		$org_id = \absint($org_id);
+		$plugin_role = sanitize_key($plugin_role);
+
+		if ($user_id <= 0 || $org_id <= 0 || empty($plugin_role)) {
 			return false;
 		}
 
-		// Basic validation for date/time strings (can be enhanced)
-		// Using strtotime is simple but might accept relative formats we don't want.
-		// Using DateTime::createFromFormat is more robust if a specific format is expected.
-		$start_timestamp = \strtotime( $start_time );
-		$end_timestamp   = \strtotime( $end_time );
-
-		if ( $start_timestamp === false || $end_timestamp === false ) {
-			error_log( "WP Schedule Plugin: Invalid start_time ('{$start_time}') or end_time ('{$end_time}') provided for create_shift." );
+		// Only allow users with WP role "schema user"
+		$user = get_userdata($user_id);
+		if (!$user || !in_array('schema_user', (array)$user->roles, true)) {
 			return false;
 		}
-		// Optional: Check if end time is after start time
-		if ( $end_timestamp <= $start_timestamp ) {
-			error_log( "WP Schedule Plugin: End time ('{$end_time}') must be after start time ('{$start_time}') for create_shift." );
-			return false;
-		}
-		// Format for database insertion (assuming DATETIME column)
-		$db_start_time = \gmdate( 'Y-m-d H:i:s', $start_timestamp );
-		$db_end_time   = \gmdate( 'Y-m-d H:i:s', $end_timestamp );
 
-
-		// 2. Get table name
-		$table_name = $this->get_table_name('shifts');
-
-		// 3. Prepare base insert data and format
-		$insert_data = [
-			'org_id'     => $org_id,
-			'start_time' => $db_start_time,
-			'end_time'   => $db_end_time,
+		$table = $this->get_table_name('plugin_org_permissions');
+		$data = [
+			'user_id' => $user_id,
+			'org_id' => $org_id,
+			'plugin_role' => $plugin_role,
 		];
-		$format = [ '%d', '%s', '%s' ]; // org_id, start_time, end_time
+		$format = ['%d', '%d', '%s'];
 
-		// 4. Process optional data
-		$allowed_statuses = [ 'pending', 'confirmed', 'cancelled' ];
-		$default_status = 'pending';
+		// Insert or ignore if already exists
+		$result = $this->wpdb->insert($table, $data, $format);
+		if ($result === false && $this->wpdb->last_error && str_contains($this->wpdb->last_error, 'Duplicate entry')) {
+			return true; // Already assigned
+		}
+		return $result !== false;
+	}
 
-		if ( isset( $data['resource_id'] ) ) {
-			$resource_id = \absint( $data['resource_id'] );
-			if ( $resource_id > 0 ) {
-				$insert_data['resource_id'] = $resource_id;
-				$format[] = '%d';
-			}
-		}
-		if ( isset( $data['user_id'] ) ) {
-			$user_id = \absint( $data['user_id'] );
-			if ( $user_id > 0 ) {
-				$insert_data['user_id'] = $user_id;
-				$format[] = '%d';
-			}
-		}
-		if ( isset( $data['title'] ) ) {
-			$insert_data['title'] = \sanitize_text_field( $data['title'] );
-			$format[] = '%s';
-		}
-		if ( isset( $data['notes'] ) ) {
-			$insert_data['notes'] = \sanitize_textarea_field( $data['notes'] );
-			$format[] = '%s';
-		}
-		if ( isset( $data['status'] ) ) {
-			$status = \sanitize_key( $data['status'] );
-			if ( in_array( $status, $allowed_statuses, true ) ) {
-				$insert_data['status'] = $status;
-			} else {
-				// Invalid status provided, log warning and use default? Or reject?
-				error_log( "WP Schedule Plugin: Invalid status '{$status}' provided for create_shift. Using default '{$default_status}'." );
-				$insert_data['status'] = $default_status; // Use default if invalid status given
-			}
-			$format[] = '%s';
-		} else {
-			// Add default status if not provided
-			$insert_data['status'] = $default_status;
-			$format[] = '%s';
-		}
+	/**
+	 * Remove a plugin role from a user in an organization.
+	 *
+	 * @param int $user_id
+	 * @param int $org_id
+	 * @param string $plugin_role
+	 * @return bool
+	 */
+	public function remove_org_permission(int $user_id, int $org_id, string $plugin_role): bool {
+		$user_id = \absint($user_id);
+		$org_id = \absint($org_id);
+		$plugin_role = sanitize_key($plugin_role);
 
-		// Note: created_at and updated_at are handled by DB defaults
-
-		// 5. Insert into database
-		$result = $this->wpdb->insert( $table_name, $insert_data, $format );
-
-		// 6. Handle result
-		if ( $result === false ) {
-			error_log( "WP Schedule Plugin: Failed to insert shift for org {$org_id}. DB Error: " . $this->wpdb->last_error );
+		if ($user_id <= 0 || $org_id <= 0 || empty($plugin_role)) {
 			return false;
 		}
 
-		return $this->wpdb->insert_id; // Return the new shift_id
-	}
-
-	/**
-	 * Retrieves a single shift by its ID.
-	 *
-	 * @param int $shift_id The shift ID.
-	 * @return object|null The shift object (stdClass) or null if not found or invalid ID.
-	 */
-	public function get_shift( int $shift_id ): ?object {
-		$shift_id = \absint( $shift_id ); // Ensure positive integer
-
-		if ( $shift_id <= 0 ) {
-			return null; // Invalid ID
-		}
-
-		$table_name = $this->get_table_name('shifts');
-
-		// Prepare the SQL query
-		$sql = $this->wpdb->prepare(
-			"SELECT * FROM {$table_name} WHERE shift_id = %d",
-			$shift_id
-		);
-
-		// Execute the query
-		$shift = $this->wpdb->get_row( $sql );
-
-		return $shift; // Returns the object or null if no row found
-	}
-
-	/**
-		* Retrieves multiple shifts based on specified arguments.
-		*
-		* @param array $args Optional arguments for filtering:
-		*                    - 'org_id' (int): Filter by organization ID.
-		*                    - 'resource_id' (int): Filter by resource ID.
-		*                    - 'user_id' (int): Filter by user ID.
-		*                    - 'status' (string): Filter by status (e.g., 'pending', 'confirmed').
-		*                    - 'start_date' (string): Filter shifts starting on or after this date ('YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS').
-		*                    - 'end_date' (string): Filter shifts ending on or before this date ('YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS').
-		*                    - 'number' (int): Number of shifts to retrieve (for pagination).
-		*                    - 'offset' (int): Offset for pagination.
-		* @return array An array of shift objects (stdClass).
-		*/
-	public function get_shifts( array $args = [] ): array {
-		$table_name = $this->get_table_name('shifts');
-
-		$where_clauses = [];
-		$sql_params = [];
-
-		// Base SQL query
-		$sql = "SELECT * FROM {$table_name}";
-
-		// Build WHERE conditions based on $args
-		if ( isset( $args['org_id'] ) ) {
-			$org_id = \absint( $args['org_id'] );
-			if ( $org_id > 0 ) {
-				$where_clauses[] = "org_id = %d";
-				$sql_params[] = $org_id;
-			}
-		}
-
-		if ( isset( $args['resource_id'] ) ) {
-			$resource_id = \absint( $args['resource_id'] );
-			if ( $resource_id > 0 ) {
-				$where_clauses[] = "resource_id = %d";
-				$sql_params[] = $resource_id;
-			}
-		}
-
-		if ( isset( $args['user_id'] ) ) {
-			$user_id = \absint( $args['user_id'] );
-			if ( $user_id > 0 ) {
-				$where_clauses[] = "user_id = %d";
-				$sql_params[] = $user_id;
-			}
-		}
-
-		if ( isset( $args['status'] ) && ! empty( $args['status'] ) ) {
-			$status = \sanitize_key( $args['status'] );
-			// Optional: Validate against allowed statuses if needed
-			$where_clauses[] = "status = %s";
-			$sql_params[] = $status;
-		}
-
-		// Handle date range filtering
-		if ( isset( $args['start_date'] ) ) {
-			$start_timestamp = \strtotime( $args['start_date'] );
-			if ( $start_timestamp !== false ) {
-				$db_start_date = \gmdate( 'Y-m-d H:i:s', $start_timestamp );
-				$where_clauses[] = "start_time >= %s";
-				$sql_params[] = $db_start_date;
-			}
-		}
-
-		if ( isset( $args['end_date'] ) ) {
-			// Adjust end_date to include the whole day if only date is provided
-			$end_date_str = $args['end_date'];
-			if ( strlen($end_date_str) === 10 ) { // Looks like 'YYYY-MM-DD'
-				$end_date_str .= ' 23:59:59'; // Include the entire end day
-			}
-			$end_timestamp = \strtotime( $end_date_str );
-			if ( $end_timestamp !== false ) {
-				$db_end_date = \gmdate( 'Y-m-d H:i:s', $end_timestamp );
-				$where_clauses[] = "end_time <= %s"; // Use end_time for filtering end date
-				$sql_params[] = $db_end_date;
-			}
-		}
-
-
-		// Append WHERE clause if needed
-		if ( ! empty( $where_clauses ) ) {
-			$sql .= ' WHERE ' . implode( ' AND ', $where_clauses );
-		}
-
-		// Prepare the query safely
-		if ( ! empty( $sql_params ) ) {
-			$prepared_sql = $this->wpdb->prepare( $sql, $sql_params );
-		} else {
-			$prepared_sql = $sql; // No parameters to prepare
-		}
-
-		// Add ORDER BY
-		$prepared_sql .= " ORDER BY start_time ASC";
-
-		// Handle LIMIT and OFFSET (Optional for now, as per instructions)
-		// if ( isset( $args['number'] ) ) {
-		// 	$number = \absint( $args['number'] );
-		// 	if ( $number > 0 ) {
-		// 		$offset = isset( $args['offset'] ) ? \absint( $args['offset'] ) : 0;
-		// 		// IMPORTANT: LIMIT parameters need separate handling with prepare or careful appending.
-		// 		// Appending directly after the main prepare is often safer.
-		// 		$prepared_sql .= $this->wpdb->prepare( " LIMIT %d OFFSET %d", $number, $offset );
-		// 	}
-		// }
-
-
-		// Execute the query
-		$shifts = $this->wpdb->get_results( $prepared_sql );
-
-		// Return results or empty array
-		return is_array( $shifts ) ? $shifts : [];
-	}
-
-	/**
-	 * Updates an existing shift record.
-	 *
-	 * @param int   $shift_id The ID of the shift to update.
-	 * @param array $data     Associative array of data to update. Allowed keys:
-	 *                        'start_time', 'end_time', 'resource_id', 'user_id',
-	 *                        'title', 'notes', 'status'.
-	 * @return bool True on success (or if no changes were needed), false on failure or invalid input.
-	 */
-	public function update_shift( int $shift_id, array $data ): bool {
-		// 1. Validate shift_id
-		$shift_id = \absint( $shift_id );
-		if ( $shift_id <= 0 ) {
-			error_log( "WP Schedule Plugin: Invalid shift_id ({$shift_id}) provided for update_shift." );
-			return false;
-		}
-
-		// 2. Get table name
-		$table_name = $this->get_table_name('shifts');
-
-		// 3. Initialize update arrays
-		$update_data = [];
-		$update_format = [];
-		$allowed_statuses = [ 'pending', 'confirmed', 'cancelled' ]; // Define allowed statuses
-
-		// 4. Iterate over data and prepare for update
-		foreach ( $data as $key => $value ) {
-			switch ( $key ) {
-				case 'start_time':
-				case 'end_time':
-					// Validate date/time string
-					$timestamp = \strtotime( $value );
-					if ( $timestamp !== false ) {
-						$db_time = \gmdate( 'Y-m-d H:i:s', $timestamp );
-						// Optional: Add validation to ensure end_time > start_time if both are updated?
-						$update_data[ $key ] = $db_time;
-						$update_format[] = '%s';
-					} else {
-						error_log( "WP Schedule Plugin: Invalid date/time value '{$value}' for key '{$key}' in update_shift (shift_id: {$shift_id})." );
-						// Decide whether to return false or just skip this field
-					}
-					break;
-
-				case 'resource_id':
-				case 'user_id':
-					if ( $value === null || $value === '' || $value === 0 || $value === '0' ) {
-						$update_data[ $key ] = null;
-						$update_format[] = null; // Let wpdb handle null format
-					} else {
-						$id = \absint( $value );
-						if ( $id > 0 ) {
-							$update_data[ $key ] = $id;
-							$update_format[] = '%d';
-						} else {
-	                            error_log( "WP Schedule Plugin: Invalid ID value '{$value}' for key '{$key}' in update_shift (shift_id: {$shift_id})." );
-	                            // Decide whether to return false or just skip this field
-	                       }
-					}
-					break;
-
-				case 'title':
-					$update_data['title'] = \sanitize_text_field( $value );
-					$update_format[] = '%s';
-					break;
-
-				case 'notes':
-					$update_data['notes'] = \sanitize_textarea_field( $value );
-					$update_format[] = '%s';
-					break;
-
-				case 'status':
-					$status = \sanitize_key( $value );
-					if ( in_array( $status, $allowed_statuses, true ) ) {
-						$update_data['status'] = $status;
-						$update_format[] = '%s';
-					} else {
-						error_log( "WP Schedule Plugin: Invalid status '{$status}' provided for update_shift (shift_id: {$shift_id})." );
-						// Decide whether to return false or just skip this field
-					}
-					break;
-
-				// Ignore other keys like org_id, shift_id, created_at, updated_at
-				default:
-					break;
-			}
-		}
-
-		// 5. Check if there's anything to update
-		if ( empty( $update_data ) ) {
-			return true; // Nothing valid to update, consider it a success.
-		}
-
-		// 6. Perform the update
-		// Note: updated_at is handled by the DB column definition ON UPDATE CURRENT_TIMESTAMP
-		$result = $this->wpdb->update(
-			$table_name,
-			$update_data,
-			[ 'shift_id' => $shift_id ], // WHERE clause
-			$update_format,              // Format for $update_data
-			[ '%d' ]                     // Format for WHERE clause
-		);
-
-		// 7. Handle result
-		if ( $result === false ) {
-			error_log( "WP Schedule Plugin: Failed to update shift ID {$shift_id}. DB Error: " . $this->wpdb->last_error );
-			return false; // Database error during update
-		}
-
-		// $result contains the number of rows updated. 0 means no rows changed (data might be the same).
-		// We consider 0 rows affected as a success in this context.
-		return true;
-	}
-
-	/**
-	 * Deletes a shift record by its ID.
-	 *
-	 * @param int $shift_id The ID of the shift to delete.
-	 * @return bool True if the shift was deleted or did not exist, false on database error.
-	 */
-	public function delete_shift( int $shift_id ): bool {
-		// 1. Validate shift_id
-		$shift_id = \absint( $shift_id );
-		if ( $shift_id <= 0 ) {
-			error_log( "WP Schedule Plugin: Invalid shift_id ({$shift_id}) provided for delete_shift." );
-			return false;
-		}
-
-		// 2. Get table name
-		$table_name = $this->get_table_name('shifts');
-
-		// 3. Perform the deletion
+		$table = $this->get_table_name('plugin_org_permissions');
 		$result = $this->wpdb->delete(
-			$table_name,
-			[ 'shift_id' => $shift_id ], // WHERE clause
-			[ '%d' ]                     // Format for WHERE clause
+			$table,
+			['user_id' => $user_id, 'org_id' => $org_id, 'plugin_role' => $plugin_role],
+			['%d', '%d', '%s']
 		);
-
-		// 4. Handle result
-		// $this->wpdb->delete() returns the number of rows affected (int >= 0) or false on error.
-		if ( $result === false ) {
-			error_log( "WP Schedule Plugin: Failed to delete shift ID {$shift_id}. DB Error: " . $this->wpdb->last_error );
-			return false; // Database error
-		}
-
-		// Return true if deletion succeeded (even if 0 rows were affected because it didn't exist)
-		return true;
+		return $result !== false;
 	}
 
-	// ... other shift methods will go here ...
+	/**
+	 * Get all plugin roles for a user in an organization.
+	 *
+	 * @param int $user_id
+	 * @param int $org_id
+	 * @return array Array of plugin_role strings.
+	 */
+	public function get_user_org_roles(int $user_id, int $org_id): array {
+		$user_id = \absint($user_id);
+		$org_id = \absint($org_id);
+		if ($user_id <= 0 || $org_id <= 0) {
+			return [];
+		}
+		$table = $this->get_table_name('plugin_org_permissions');
+		$sql = $this->wpdb->prepare(
+			"SELECT plugin_role FROM {$table} WHERE user_id = %d AND org_id = %d",
+			$user_id, $org_id
+		);
+		return $this->wpdb->get_col($sql) ?: [];
+	}
+
+	/**
+	 * Check if a user has a specific plugin role in an organization.
+	 *
+	 * @param int $user_id
+	 * @param int $org_id
+	 * @param string $plugin_role
+	 * @return bool
+	 */
+	public function user_has_org_role(int $user_id, int $org_id, string $plugin_role): bool {
+		$user_id = \absint($user_id);
+		$org_id = \absint($org_id);
+		$plugin_role = sanitize_key($plugin_role);
+		if ($user_id <= 0 || $org_id <= 0 || empty($plugin_role)) {
+			return false;
+		}
+		$table = $this->get_table_name('plugin_org_permissions');
+		$sql = $this->wpdb->prepare(
+			"SELECT COUNT(*) FROM {$table} WHERE user_id = %d AND org_id = %d AND plugin_role = %s",
+			$user_id, $org_id, $plugin_role
+		);
+		return (int)$this->wpdb->get_var($sql) > 0;
+	}
 }

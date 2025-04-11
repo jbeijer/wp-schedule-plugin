@@ -16,8 +16,12 @@
     let editingMember = null; // Store the member being edited
     let userToAdd = ''; // Could be email or ID for searching WP users
     let selectedUserId = null; // ID of the WP user found
-    let selectedRole = 'employee';
-    let employmentNumber = '';
+    let selectedRoles = []; // Array of plugin roles
+    let availableRoles = [
+        { value: 'employee', label: $t('roleEmployee') },
+        { value: 'scheduler', label: $t('roleScheduler') },
+        { value: 'org_admin', label: $t('roleOrgAdmin') }
+    ];
 
     async function fetchMembers() {
         if (!orgId) return;
@@ -54,8 +58,7 @@
         // Reset form fields
         userToAdd = '';
         selectedUserId = null;
-        selectedRole = 'employee';
-        employmentNumber = '';
+        selectedRoles = [];
         errorMessage = '';
         successMessage = '';
     }
@@ -80,6 +83,10 @@
             errorMessage = $t('userNotSelected');
             return;
         }
+        if (!selectedRoles.length) {
+            errorMessage = $t('roleNotSelected');
+            return;
+        }
         isLoading = true;
         errorMessage = '';
         successMessage = '';
@@ -87,53 +94,56 @@
         const data = {
             org_id: orgId,
             user_id: selectedUserId,
-            internal_role: selectedRole,
-            employment_number: employmentNumber.trim() || null,
+            plugin_role: selectedRoles[0] // API expects one role per call for add
         };
 
         try {
-            const response = await apiFetch({
-                path: 'wp-schedule-plugin/v1/organization_members',
-                method: 'POST',
-                data: data,
-            });
-            if (response && response.success) {
-                successMessage = $t('memberAddSuccess');
-                await fetchMembers(); // Refresh list
-                isAdding = false; // Close form
-            } else {
-                throw new Error(response?.message || $t('memberAddFailedGeneric'));
+            // Add each selected role for this user
+            for (let role of selectedRoles) {
+                data.plugin_role = role;
+                const response = await apiFetch({
+                    path: 'wp-schedule-plugin/v1/organization_members',
+                    method: 'POST',
+                    data: data,
+                });
+                if (!(response && response.success)) {
+                    throw new Error(response?.message || $t('memberAddFailedGeneric'));
+                }
             }
+            successMessage = $t('memberAddSuccess');
+            await fetchMembers(); // Refresh list
+            isAdding = false; // Close form
         } catch (error) {
-             errorMessage = `${$t('memberAddFailed')}: ${error.message}`;
-             console.error('Add Member Error:', error);
+            errorMessage = `${$t('memberAddFailed')}: ${error.message}`;
+            console.error('Add Member Error:', error);
         } finally {
             isLoading = false;
-             setTimeout(() => { successMessage = ''; errorMessage = ''; }, 4000);
+            setTimeout(() => { successMessage = ''; errorMessage = ''; }, 4000);
         }
     }
 
     function startEditMember(member) {
         editingMember = { ...member }; // Clone member data
         isAdding = false; // Ensure not in add mode
-        // Pre-fill form (role and employment number)
-        selectedRole = editingMember.internal_role;
-        employmentNumber = editingMember.employment_number || '';
+        // Pre-fill form (roles)
+        selectedRoles = Array.isArray(editingMember.plugin_roles) ? [...editingMember.plugin_roles] : [];
         errorMessage = '';
         successMessage = '';
     }
 
-     async function handleUpdateMember() {
+    async function handleUpdateMember() {
         if (!editingMember) return;
-
+        if (!selectedRoles.length) {
+            errorMessage = $t('roleNotSelected');
+            return;
+        }
         isLoading = true;
         errorMessage = '';
         successMessage = '';
 
         const data = {
             org_id: orgId, // Required for permission check on backend
-            internal_role: selectedRole,
-            employment_number: employmentNumber.trim() || null,
+            plugin_roles: selectedRoles
         };
 
         try {
@@ -150,11 +160,11 @@
                 throw new Error(response?.message || $t('memberUpdateFailedGeneric'));
             }
         } catch (error) {
-             errorMessage = `${$t('memberUpdateFailed')}: ${error.message}`;
-             console.error('Update Member Error:', error);
+            errorMessage = `${$t('memberUpdateFailed')}: ${error.message}`;
+            console.error('Update Member Error:', error);
         } finally {
             isLoading = false;
-             setTimeout(() => { successMessage = ''; errorMessage = ''; }, 4000);
+            setTimeout(() => { successMessage = ''; errorMessage = ''; }, 4000);
         }
     }
 
@@ -166,7 +176,7 @@
         errorMessage = '';
         successMessage = '';
         try {
-             // org_id is needed as a query param for permission check
+            // org_id is needed as a query param for permission check
             const response = await apiFetch({
                 path: `wp-schedule-plugin/v1/organization_members/${userId}?org_id=${orgId}`,
                 method: 'DELETE',
@@ -175,7 +185,7 @@
                 successMessage = $t('memberRemoveSuccess');
                 await fetchMembers(); // Refresh list
             } else {
-                 throw new Error(response?.message || $t('memberRemoveFailedGeneric'));
+                throw new Error(response?.message || $t('memberRemoveFailedGeneric'));
             }
         } catch (error) {
             errorMessage = `${$t('memberRemoveFailed')}: ${error.message}`;
@@ -186,6 +196,13 @@
         }
     }
 
+    function toggleRole(role) {
+        if (selectedRoles.includes(role)) {
+            selectedRoles = selectedRoles.filter(r => r !== role);
+        } else {
+            selectedRoles = [...selectedRoles, role];
+        }
+    }
 </script>
 
 <div class="member-manager">
@@ -208,7 +225,7 @@
     {#if isAdding}
         <div class="member-form add-form">
             <h3>{$t('addMember')}</h3>
-             <!-- User Search Placeholder -->
+            <!-- User Search Placeholder -->
             <div class="form-field">
                 <label for="user-search">{$t('findUserLabel')}:</label>
                 <input type="text" id="user-search" bind:value={userToAdd} placeholder={$t('userSearchPlaceholder')} disabled={isLoading}>
@@ -218,16 +235,13 @@
 
             {#if selectedUserId}
                 <div class="form-field">
-                    <label for="member-role">{$t('memberRoleLabel')}:</label>
-                    <select id="member-role" bind:value={selectedRole} disabled={isLoading}>
-                        <option value="employee">{$t('roleEmployee')}</option>
-                        <option value="scheduler">{$t('roleScheduler')}</option>
-                        <option value="org_admin">{$t('roleOrgAdmin')}</option>
-                    </select>
-                </div>
-                <div class="form-field">
-                    <label for="employment-number">{$t('employmentNumberLabel')}:</label>
-                    <input type="text" id="employment-number" bind:value={employmentNumber} disabled={isLoading}>
+                    <label>{$t('memberRoleLabel')}:</label>
+                    {#each availableRoles as role}
+                        <label class="role-checkbox">
+                            <input type="checkbox" value={role.value} checked={selectedRoles.includes(role.value)} on:change={() => toggleRole(role.value)} disabled={isLoading}>
+                            {role.label}
+                        </label>
+                    {/each}
                 </div>
                 <div class="form-actions">
                     <button class="button button-primary" on:click={handleAddMember} disabled={isLoading}>
@@ -239,25 +253,22 @@
         </div>
     {/if}
 
-     <!-- Edit Member Form -->
+    <!-- Edit Member Form -->
     {#if editingMember}
         <div class="member-form edit-form">
             <h3>{$t('editMemberTitle', { name: editingMember.display_name || `User ${editingMember.user_id}` })}</h3>
-             <div class="form-field">
-                <label for="edit-member-role">{$t('memberRoleLabel')}:</label>
-                <select id="edit-member-role" bind:value={selectedRole} disabled={isLoading}>
-                    <option value="employee">{$t('roleEmployee')}</option>
-                    <option value="scheduler">{$t('roleScheduler')}</option>
-                    <option value="org_admin">{$t('roleOrgAdmin')}</option>
-                </select>
-            </div>
             <div class="form-field">
-                <label for="edit-employment-number">{$t('employmentNumberLabel')}:</label>
-                <input type="text" id="edit-employment-number" bind:value={employmentNumber} disabled={isLoading}>
+                <label>{$t('memberRoleLabel')}:</label>
+                {#each availableRoles as role}
+                    <label class="role-checkbox">
+                        <input type="checkbox" value={role.value} checked={selectedRoles.includes(role.value)} on:change={() => toggleRole(role.value)} disabled={isLoading}>
+                        {role.label}
+                    </label>
+                {/each}
             </div>
             <div class="form-actions">
                 <button class="button button-primary" on:click={handleUpdateMember} disabled={isLoading}>
-                     {#if isLoading}{$t('saving')}{:else}{$t('saveChanges')}{/if}
+                    {#if isLoading}{$t('saving')}{:else}{$t('saveChanges')}{/if}
                 </button>
                 <button class="button" on:click={() => editingMember = null} disabled={isLoading}>{$t('cancel')}</button>
             </div>
@@ -272,17 +283,23 @@
                     <th scope="col">{$t('memberName')}</th>
                     <th scope="col">{$t('memberEmail')}</th>
                     <th scope="col">{$t('memberRole')}</th>
-                    <th scope="col">{$t('employmentNumber')}</th>
                     <th scope="col">{$t('memberActions')}</th>
                 </tr>
             </thead>
             <tbody>
-                {#each members as member (member.membership_id)}
+                {#each members as member (member.user_id)}
                     <tr>
                         <td>{member.display_name || `User ${member.user_id}`}</td>
                         <td>{member.user_email || '-'}</td>
-                        <td>{$t(`role${member.internal_role.charAt(0).toUpperCase() + member.internal_role.slice(1)}`)}</td>
-                        <td>{member.employment_number || '-'}</td>
+                        <td>
+                            {#if Array.isArray(member.plugin_roles) && member.plugin_roles.length}
+                                {#each member.plugin_roles as role, i}
+                                    <span class="role-badge">{ $t(`role${role.charAt(0).toUpperCase() + role.slice(1)}`) }{i < member.plugin_roles.length - 1 ? ', ' : ''}</span>
+                                {/each}
+                            {:else}
+                                <span>-</span>
+                            {/if}
+                        </td>
                         <td>
                             <button class="button button-small" on:click={() => startEditMember(member)}>{$t('edit')}</button>
                             <button class="button button-small button-link-delete" on:click={() => handleDeleteMember(member.user_id)}>{$t('remove')}</button>
@@ -290,7 +307,7 @@
                     </tr>
                 {:else}
                     <tr>
-                        <td colspan="5">{$t('noMembersFound')}</td>
+                        <td colspan="4">{$t('noMembersFound')}</td>
                     </tr>
                 {/each}
             </tbody>
@@ -319,14 +336,19 @@
         margin-bottom: 0.3em;
         font-weight: bold;
     }
+    .role-checkbox {
+        display: inline-block;
+        margin-right: 1em;
+        font-weight: normal;
+    }
     .form-field input[type="text"],
     .form-field select {
         width: 100%;
         max-width: 350px;
         padding: 6px;
-        margin-right: 5px; /* Space before search button */
+        margin-right: 5px;
     }
-     .user-found {
+    .user-found {
         margin-left: 10px;
         font-style: italic;
         color: green;
@@ -369,7 +391,14 @@
     .button-link-delete:hover {
         color: #a00;
     }
-    /* Ensure table styles are applied */
+    .role-badge {
+        background: #e5e5e5;
+        border-radius: 3px;
+        padding: 2px 6px;
+        margin-right: 4px;
+        font-size: 0.95em;
+        display: inline-block;
+    }
     .wp-list-table {
         margin-top: 1em;
     }

@@ -117,6 +117,41 @@ class ApiHandlers {
 			]
 		);
 
+		// --- Dashboard Stats Route ---
+		\register_rest_route(
+			$this->namespace,
+			'/dashboard-stats',
+			[
+				[
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => [ $this, 'handle_dashboard_stats' ],
+					'permission_callback' => [ $this, 'permission_check_callback' ],
+				],
+			]
+		);
+
+		// --- Shifts Summary Route ---
+		\register_rest_route(
+			$this->namespace,
+			'/shifts/summary',
+			[
+				[
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => [ $this, 'handle_shifts_summary' ],
+					'permission_callback' => [ $this, 'permission_check_callback' ],
+					'args'                => [
+						'group_by' => [
+							'type'    => 'string',
+							'enum'    => [ 'week' ],
+							'default' => 'week',
+							'description' => 'Group shifts by week',
+							'required' => false,
+						],
+					],
+				],
+			]
+		);
+
 
 		// --- Member Routes (Fas 1 / Fas 4) ---
 		\register_rest_route(
@@ -901,7 +936,7 @@ class ApiHandlers {
 		return $response;
 	}
 
-	protected function get_validated_org_id( WP_REST_Request $request, ?string $min_role = null, string $param_name = 'org_id' ): int|WP_Error {
+	protected function get_validated_org_id( WP_REST_Request $request, ?string $min_plugin_role = null, string $param_name = 'org_id' ): int|WP_Error {
 		// Determine if we should look in query params or body/path params
 		$param_source = $request->get_method() === 'GET' ? $request->get_query_params() : $request->get_params();
 
@@ -937,7 +972,7 @@ class ApiHandlers {
 		if ( ! $organization ) {
 			return new WP_Error( 'rest_not_found', \__( 'Organization not found.', 'wp-schedule-plugin' ), [ 'status' => 404 ] );
 		}
-		if ( $min_role !== null ) {
+		if ( $min_plugin_role !== null ) {
 			$user_id = \get_current_user_id();
 			if ( $user_id <= 0 ) {
 				return new WP_Error( 'rest_not_logged_in', \__( 'You must be logged in.', 'wp-schedule-plugin' ), [ 'status' => 401 ] );
@@ -945,13 +980,9 @@ class ApiHandlers {
 			if ( \current_user_can( 'manage_options' ) ) {
 				return $org_id;
 			}
-			$user_role = $this->db->get_user_internal_role( $user_id, $org_id );
-			if ( $user_role === false ) {
-				return new WP_Error( 'rest_forbidden_member', \__( 'You are not a member of this organization.', 'wp-schedule-plugin' ), [ 'status' => 403 ] );
-			}
-			$role_hierarchy = [ 'employee' => 1, 'scheduler' => 2, 'org_admin' => 3 ];
-			if ( ! isset( $role_hierarchy[ $user_role ] ) || ! isset( $role_hierarchy[ $min_role ] ) || $role_hierarchy[ $user_role ] < $role_hierarchy[ $min_role ] ) {
-				return new WP_Error( 'rest_forbidden_role', \sprintf( \__( 'Your role ("%s") does not meet the required level ("%s") for this action in this organization.', 'wp-schedule-plugin' ), $user_role, $min_role ), [ 'status' => 403 ] );
+			// Check plugin role in org permissions table
+			if ( ! $this->db->user_has_org_role( $user_id, $org_id, $min_plugin_role ) ) {
+				return new WP_Error( 'rest_forbidden_role', \sprintf( \__( 'You do not have the required plugin role ("%s") for this action in this organization.', 'wp-schedule-plugin' ), $min_plugin_role ), [ 'status' => 403 ] );
 			}
 		}
 		return $org_id;
@@ -986,8 +1017,31 @@ class ApiHandlers {
 	}
 
 	public function get_organizations_handler( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
-		$args = []; // Add potential future args like search, parent_id etc.
-		$organizations = $this->db->get_organizations( $args );
+		$user_id = get_current_user_id();
+		if ( current_user_can( 'manage_options' ) ) {
+			// Admins get all organizations, with pagination support
+			$args = [];
+			// Support limit, number, offset, page, per_page
+			$limit = $request->get_param('limit');
+			$number = $request->get_param('number');
+			$offset = $request->get_param('offset');
+			$page = $request->get_param('page');
+			$per_page = $request->get_param('per_page');
+			if ($limit !== null) $args['limit'] = (int)$limit;
+			elseif ($number !== null) $args['number'] = (int)$number;
+			if ($offset !== null) $args['offset'] = (int)$offset;
+			// page/per_page to offset/limit
+			if ($per_page !== null) {
+				$args['limit'] = (int)$per_page;
+				if ($page !== null) {
+					$args['offset'] = ((int)$page - 1) * (int)$per_page;
+				}
+			}
+			$organizations = $this->db->get_organizations( $args );
+		} else {
+			// Non-admins get only organizations they are a member of
+			$organizations = $this->db->get_user_memberships( $user_id );
+		}
 		return $this->api_response( true, 'orgFetchSuccess', [ 'organizations' => $organizations ] );
 	}
 
@@ -1001,9 +1055,9 @@ class ApiHandlers {
 		}
 		$user_id = \get_current_user_id();
 		if ( $user_id > 0 ) {
-			$organization->current_user_role = $this->db->get_user_internal_role( $user_id, $org_id );
+			$organization->current_user_plugin_roles = $this->db->get_user_org_roles( $user_id, $org_id );
 		} else {
-			$organization->current_user_role = false;
+			$organization->current_user_plugin_roles = [];
 		}
 		return $this->api_response( true, 'orgFetchSuccess', [ 'organization' => $organization ] );
 	}
@@ -1078,48 +1132,55 @@ class ApiHandlers {
 	public function get_organization_members_handler( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
 		// org_id is validated by permission callback
 		$org_id = \absint( $request['org_id'] );
-		$args = [
-			'search' => $request->get_param('search'), // Sanitized by args
-			'number' => $request->get_param('number'), // Sanitized by args
-			'offset' => $request->get_param('offset'), // Sanitized by args
-		];
-		// Remove null/empty values so DB method uses defaults if needed
-		$args = \array_filter($args, function($value) { return $value !== null && $value !== ''; });
-
-		$members = $this->db->get_organization_members( $org_id, true, $args );
-		// $total_members = $this->db->count_organization_members( $org_id, $args['search'] ?? null ); // Removed call to undefined method
-
-		// Return directly without pagination headers for now
+		$include_user_data = true;
+		$args = [];
+		// Support number, limit, offset, page, per_page
+		$limit = $request->get_param('limit');
+		$number = $request->get_param('number');
+		$offset = $request->get_param('offset');
+		$page = $request->get_param('page');
+		$per_page = $request->get_param('per_page');
+		if ($limit !== null) $args['number'] = (int)$limit;
+		elseif ($number !== null) $args['number'] = (int)$number;
+		if ($offset !== null) $args['offset'] = (int)$offset;
+		if ($per_page !== null) {
+			$args['number'] = (int)$per_page;
+			if ($page !== null) {
+				$args['offset'] = ((int)$page - 1) * (int)$per_page;
+			}
+		}
+		$members = $this->db->get_organization_members($org_id, $include_user_data, $args);
 		return $this->api_response( true, 'membersFetchSuccess', [ 'members' => $members ] );
-		// $response = $this->api_response( true, 'membersFetchSuccess', [ 'members' => $members ] );
-		// if (\is_numeric($total_members)) { // Check if count was successful before adding headers
-		//  $response->header( 'X-WP-Total', (int) $total_members );
-		//  $response->header( 'X-WP-TotalPages', \ceil( $total_members / ( $args['number'] ?? 20 ) ) );
-		// }
-		// return $response;
 	}
 
 	public function add_organization_member_handler( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
 		// org_id is validated by permission callback
 		$org_id = \absint( $request['org_id'] );
 		$user_id = \absint( $request['user_id'] ); // Sanitized by args
-		$internal_role = $request['internal_role']; // Validated by enum in args
-		$employment_number = $request->get_param('employment_number'); // Sanitized by args
+		$plugin_role = $request['plugin_role']; // Validated by enum in args
 
 		$user_data = \get_userdata( $user_id );
 		if ( ! $user_data ) {
 			return new WP_Error( 'rest_user_invalid_id', \__( 'Invalid user ID provided.', 'wp-schedule-plugin' ), [ 'status' => 400 ] );
 		}
-		$membership_id = $this->db->add_member( $user_id, $org_id, $internal_role, $employment_number );
-		if ( $membership_id === false ) {
-			if ( $this->db->get_member( $user_id, $org_id ) ) {
-				return new WP_Error( 'rest_member_exists', \__( 'This user is already a member of this organization.', 'wp-schedule-plugin' ), [ 'status' => 409 ] );
-			} else {
-				return $this->api_response( false, 'memberAddFailedDb', [], 500 );
-			}
+		// Only allow users with WP role "schema user"
+		if ( ! in_array( 'schema_user', (array)$user_data->roles, true ) ) {
+			return new WP_Error( 'rest_user_not_schema_user', \__( 'User must have the "schema user" role to be assigned plugin roles.', 'wp-schedule-plugin' ), [ 'status' => 400 ] );
 		}
-		$members = $this->db->get_organization_members( $org_id, true, [ 'user_id' => $user_id ] );
-		return $this->api_response( true, 'memberAddSuccess', [ 'member' => $members[0] ?? null ], 201 );
+		$success = $this->db->add_org_permission( $user_id, $org_id, $plugin_role );
+		if ( ! $success ) {
+			return $this->api_response( false, 'memberAddFailedDb', [], 500 );
+		}
+		// Return the new member's plugin roles
+		$roles = $this->db->get_user_org_roles( $user_id, $org_id );
+		return $this->api_response( true, 'memberAddSuccess', [
+			'member' => [
+				'user_id' => $user_id,
+				'plugin_roles' => $roles,
+				'display_name' => $user_data->display_name,
+				'user_email' => $user_data->user_email,
+			]
+		], 201 );
 	}
 
 	public function update_organization_member_handler( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
@@ -1127,31 +1188,40 @@ class ApiHandlers {
 		$org_id = \absint( $request['org_id'] );
 		$user_id = \absint( $request['user_id'] ); // From URL path
 		$params = $request->get_params(); // Sanitized by args
-		$update_data = [];
 
-		if ( isset( $params['internal_role'] ) ) {
-			$update_data['internal_role'] = $params['internal_role']; // Validated by enum
+		$user_data = \get_userdata($user_id);
+		if (!$user_data) {
+			return new WP_Error( 'rest_user_invalid_id', \__( 'Invalid user ID provided.', 'wp-schedule-plugin' ), [ 'status' => 400 ] );
 		}
-		if ( \array_key_exists( 'employment_number', $params ) ) {
-			$update_data['employment_number'] = $params['employment_number']; // Sanitized
+		// Only allow users with WP role "schema user"
+		if ( ! in_array( 'schema_user', (array)$user_data->roles, true ) ) {
+			return new WP_Error( 'rest_user_not_schema_user', \__( 'User must have the "schema user" role to be assigned plugin roles.', 'wp-schedule-plugin' ), [ 'status' => 400 ] );
 		}
-		if ( empty( $update_data ) ) {
-			$member = $this->db->get_member( $user_id, $org_id );
-			if ( ! $member ) return new WP_Error( 'rest_member_not_found', \__( 'Membership not found.', 'wp-schedule-plugin' ), [ 'status' => 404 ] );
-			$user_data = \get_userdata($user_id);
-			if ($user_data) { $member->display_name = $user_data->display_name; $member->user_email = $user_data->user_email; }
-			return $this->api_response( true, 'memberNothingToUpdate', [ 'member' => $member ] );
+
+		// Update plugin roles: expects 'plugin_roles' as array in params
+		if ( isset($params['plugin_roles']) && is_array($params['plugin_roles']) ) {
+			// Remove all current roles for this user/org, then add the new ones
+			$current_roles = $this->db->get_user_org_roles($user_id, $org_id);
+			foreach ($current_roles as $role) {
+				$this->db->remove_org_permission($user_id, $org_id, $role);
+			}
+			foreach ($params['plugin_roles'] as $role) {
+				$this->db->add_org_permission($user_id, $org_id, $role);
+			}
+		} else {
+			return new WP_Error( 'rest_missing_plugin_roles', \__( 'Missing or invalid plugin_roles array.', 'wp-schedule-plugin' ), [ 'status' => 400 ] );
 		}
-		$existing_member = $this->db->get_member( $user_id, $org_id );
-		if ( ! $existing_member ) {
-			return new WP_Error( 'rest_member_not_found', \__( 'Membership not found.', 'wp-schedule-plugin' ), [ 'status' => 404 ] );
-		}
-		$success = $this->db->update_member( $user_id, $org_id, $update_data );
-		if ( ! $success ) {
-			return $this->api_response( false, 'memberUpdateFailedDb', [], 500 );
-		}
-		$members = $this->db->get_organization_members( $org_id, true, [ 'user_id' => $user_id ] );
-		return $this->api_response( true, 'memberUpdateSuccess', [ 'member' => $members[0] ?? null ] );
+
+		// Return updated member info
+		$roles = $this->db->get_user_org_roles($user_id, $org_id);
+		return $this->api_response( true, 'memberUpdateSuccess', [
+			'member' => [
+				'user_id' => $user_id,
+				'plugin_roles' => $roles,
+				'display_name' => $user_data->display_name,
+				'user_email' => $user_data->user_email,
+			]
+		]);
 	}
 
 	public function delete_organization_member_handler( WP_REST_Request $request ): \WP_REST_Response|WP_Error {
@@ -1162,11 +1232,15 @@ class ApiHandlers {
 		if ( $user_id === \get_current_user_id() ) {
 			return new WP_Error( 'rest_cannot_remove_self', \__( 'You cannot remove yourself from an organization.', 'wp-schedule-plugin' ), [ 'status' => 403 ] );
 		}
-		$existing_member = $this->db->get_member( $user_id, $org_id );
-		if ( ! $existing_member ) {
+		// Remove all plugin roles for this user/org
+		$current_roles = $this->db->get_user_org_roles($user_id, $org_id);
+		if (empty($current_roles)) {
 			return new WP_Error( 'rest_member_not_found', \__( 'Membership not found.', 'wp-schedule-plugin' ), [ 'status' => 404 ] );
 		}
-		$success = $this->db->remove_member( $user_id, $org_id );
+		$success = true;
+		foreach ($current_roles as $role) {
+			$success = $success && $this->db->remove_org_permission($user_id, $org_id, $role);
+		}
 		if ( ! $success ) {
 			return $this->api_response( false, 'memberRemoveFailedDb', [], 500 );
 		}
@@ -1228,15 +1302,23 @@ public function get_resources_handler( WP_REST_Request $request ): \WP_REST_Resp
 		'org_id' => $org_id, // Always include the validated org_id
 	];
 
-	$query_params = [ 'type', 'is_active', 'number', 'offset' ];
+	$query_params = [ 'type', 'is_active', 'number', 'offset', 'limit', 'page', 'per_page' ];
 	foreach ( $query_params as $param ) {
-		// Use has_param to check if it was actually sent in the query string
 		if ( $request->has_param( $param ) ) {
-			$value = $request->get_param( $param ); // Already sanitized by args definition
-			// Special handling for boolean 'is_active' which might be string 'true'/'false'
-			// The rest_sanitize_boolean callback handles this conversion.
+			$value = $request->get_param( $param );
 			$db_args[ $param ] = $value;
 		}
+	}
+	// page/per_page to offset/number
+	if (isset($db_args['per_page'])) {
+		$db_args['number'] = (int)$db_args['per_page'];
+		if (isset($db_args['page'])) {
+			$db_args['offset'] = ((int)$db_args['page'] - 1) * (int)$db_args['per_page'];
+		}
+	}
+	// limit as alias for number
+	if (isset($db_args['limit'])) {
+		$db_args['number'] = (int)$db_args['limit'];
 	}
 
 	// Fetch resources from the database
@@ -1247,21 +1329,7 @@ public function get_resources_handler( WP_REST_Request $request ): \WP_REST_Resp
 		return $resources; // Forward the WP_Error
 	}
 
-	// Pagination headers removed as count_resources method is not implemented yet.
 	$headers = [];
-	// if ( isset( $db_args['number'] ) ) {
-	//  // We need the total count for pagination headers
-	//  $count_args = $db_args;
-	//  unset( $count_args['number'], $count_args['offset'] ); // Don't limit the count query
-	//  $total_resources = $this->db->count_resources( $count_args ); // Assuming this method exists and handles potential errors
-	//
-	//  if ( \is_numeric( $total_resources ) ) {
-	//      $headers['X-WP-Total'] = (int) $total_resources;
-	//      $headers['X-WP-TotalPages'] = \ceil( $total_resources / $db_args['number'] );
-	//  } else {
-	//      \error_log("WP Schedule Plugin: Failed to get total resource count for pagination headers.");
-	//  }
-	// }
 
 	return $this->api_response( true, 'resourcesFetchSuccess', [ 'resources' => $resources ], 200, $headers );
 }
@@ -1478,16 +1546,25 @@ public function get_resources_handler( WP_REST_Request $request ): \WP_REST_Resp
 			'org_id' => $org_id, // Always include the validated org_id
 		];
 
-		$query_params = [ 'resource_id', 'user_id', 'status', 'start_date', 'end_date', 'number', 'offset' ];
+		$query_params = [ 'resource_id', 'user_id', 'status', 'start_date', 'end_date', 'number', 'offset', 'limit', 'page', 'per_page' ];
 		foreach ( $query_params as $param ) {
-			// Use has_param to check if it was actually sent in the query string
 			if ( $request->has_param( $param ) ) {
-				$value = $request->get_param( $param ); // Already sanitized/validated by args definition
-				// Ensure we don't pass empty strings or nulls for optional filters unless intended
+				$value = $request->get_param( $param );
 				if ( $value !== null && $value !== '' ) {
 					 $db_args[ $param ] = $value;
 				}
 			}
+		}
+		// page/per_page to offset/limit
+		if (isset($db_args['per_page'])) {
+			$db_args['limit'] = (int)$db_args['per_page'];
+			if (isset($db_args['page'])) {
+				$db_args['offset'] = ((int)$db_args['page'] - 1) * (int)$db_args['per_page'];
+			}
+		}
+		// limit as alias for number
+		if (isset($db_args['limit'])) {
+			$db_args['number'] = (int)$db_args['limit'];
 		}
 
 		// Fetch shifts from the database
@@ -1498,13 +1575,7 @@ public function get_resources_handler( WP_REST_Request $request ): \WP_REST_Resp
 			return $shifts; // Forward the WP_Error
 		}
 
-		// Optional: Add pagination headers if needed (requires a count method)
 		$headers = [];
-		// $total_shifts = $this->db->count_shifts( $db_args ); // Assuming count_shifts exists
-		// if ( isset( $db_args['number'] ) && is_numeric( $total_shifts ) ) {
-		//     $headers['X-WP-Total'] = (int) $total_shifts;
-		//     $headers['X-WP-TotalPages'] = ceil( $total_shifts / $db_args['number'] );
-		// }
 
 		return $this->api_response( true, 'shiftsFetchSuccess', [ 'shifts' => $shifts ], 200, $headers );
 	}
@@ -1645,5 +1716,41 @@ public function get_resources_handler( WP_REST_Request $request ): \WP_REST_Resp
 		return $this->api_response( true, 'shiftDeleteSuccess' );
 	}
 
+	/**
+	 * Handle GET /dashboard-stats
+	 * Returns summary statistics for the dashboard (KPI).
+	 *
+	 * @param WP_REST_Request $request
+	 * @return WP_REST_Response
+	 */
+	public function handle_dashboard_stats( WP_REST_Request $request ) {
+		// TODO: Implement actual statistics logic
+		$data = [
+			'upcoming_shifts' => 0,
+			'resources' => 0,
+			'coverage' => 0,
+			'open_shifts' => 0,
+		];
+		return new \WP_REST_Response( $data, 200 );
+	}
 
+	/**
+	 * Handle GET /shifts/summary
+	 * Returns aggregated shift data, grouped by week.
+	 *
+	 * @param WP_REST_Request $request
+	 * @return WP_REST_Response
+	 */
+	public function handle_shifts_summary( WP_REST_Request $request ) {
+		$group_by = $request->get_param( 'group_by' ) ?: 'week';
+		// TODO: Implement actual aggregation logic
+		$data = [
+			[
+				'week' => '2025-W15',
+				'shifts' => 0,
+			],
+			// ...
+		];
+		return new \WP_REST_Response( $data, 200 );
+	}
 } // End of class ApiHandlers

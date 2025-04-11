@@ -1,4 +1,4 @@
-<script>
+X <script>
   import { onMount, createEventDispatcher } from 'svelte';
   import apiFetch from '../api'; // Use default import
   import { t } from '../i18n'; // Assuming t is a store exported from i18n.js
@@ -23,7 +23,7 @@
     try {
       // Use apiFetch which should handle adding the nonce and base path
       // apiFetch returns the parsed JSON directly or throws an error
-      const response = await apiFetch({ path: `/wp-schedule-plugin/v1/resources?org_id=${orgId}` });
+      const response = await apiFetch({ path: `wp-schedule-plugin/v1/resources?org_id=${orgId}` });
 
       if (response && response.success && response.data && Array.isArray(response.data.resources)) {
         resources = response.data.resources;

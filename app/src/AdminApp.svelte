@@ -4,10 +4,11 @@
     import { t, isLoading as i18nIsLoading } from './i18n.js'; // Import translation function and loading state
 
     // Import the new component
-    import OrganizationManager from './lib/OrganizationManager.svelte';
-    import MemberManager from './lib/MemberManager.svelte'; // Import MemberManager
-    import ResourceList from './lib/ResourceList.svelte'; // Import ResourceList
-    import ResourceForm from './lib/ResourceForm.svelte'; // Import ResourceForm
+    import Dashboard from './lib/Dashboard.svelte';
+    // import OrganizationManager from './lib/OrganizationManager.svelte';
+    // import MemberManager from './lib/MemberManager.svelte';
+    // import ResourceList from './lib/ResourceList.svelte';
+    // import ResourceForm from './lib/ResourceForm.svelte';
     // import ScheduleComponent from "./lib/ScheduleComponent.svelte";
     // Reactive state variables
     // let scheduleItems = []; // No longer needed directly here
@@ -151,60 +152,8 @@
 
         <!-- Show main content area after initial load attempt, even if subsequent loads happen -->
         {#if initialLoadComplete && !$i18nIsLoading}
-        	<!-- Example Button to re-run test -->
-        	<button on:click={testApiCall} disabled={isLoading}>{$t('testApiButton')}</button>
-      
-        	<hr>
-      
-        	<!-- Organization Management Section -->
-        	<OrganizationManager bind:selectedOrgId />
-      
-        	<hr>
-      
-        	<!-- Member Management Section (Placeholder for now) -->
-        	{#if selectedOrgId}
-        		<h2>{$t('manageMembersForOrg', { id: selectedOrgId })}</h2>
-        		<!-- Render MemberManager when an org is selected -->
-        		<MemberManager orgId={selectedOrgId} />
-        	{:else}
-        		<p>{$t('selectOrgToManageMembers')}</p>
-        	{/if}
-
-        	   <hr>
-
-        	   <!-- Resource Management Section -->
-        	   {#if selectedOrgId}
-        	       <h2>{$t('manageResources')}</h2>
-
-        	       {#if showResourceForm}
-        	           <!-- Resource Form (Add/Edit) -->
-        	           <ResourceForm
-        	               orgId={selectedOrgId}
-        	               resource={resourceToEdit}
-        	               on:saveSuccess={handleResourceSaveSuccess}
-        	               on:cancel={handleResourceCancel}
-        	           />
-        	           <hr> <!-- Add separator when form is shown -->
-        	       {:else}
-        	           <!-- Add Resource Button -->
-        	           <button on:click={handleAddResourceClick}>{$t('addResource')}</button>
-
-        	           <!-- Resource List -->
-        	           <ResourceList
-        	               orgId={selectedOrgId}
-        	               on:editResource={handleEditResource}
-        	               on:deleteResource={handleDeleteResource}
-        	           />
-        	       {/if}
-
-        	   {:else}
-        	       <!-- Optionally show a message if no org is selected for resources -->
-        	       <!-- <p>Välj en organisation för att hantera resurser.</p> -->
-        	   {/if}
-
-        	<!-- ScheduleComponent might be used later for actual scheduling view -->
-        	<!-- <ScheduleComponent ... /> -->
-
+            <!-- Dashboard is now the default admin view -->
+            <Dashboard />
         {/if}
 
     </div>

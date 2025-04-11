@@ -108,16 +108,18 @@ function wp_schedule_plugin_activate() {
 	$db->create_or_update_tables();
 	error_log('WP Schedule Plugin: create_or_update_tables() called during activation.'); // DEBUG
 
-	// Add custom capability to administrator role
-	$admin_role = \get_role( 'administrator' );
-	if ( $admin_role instanceof \WP_Role ) {
-		$admin_role->add_cap( 'access_schemaplugin', true );
-		error_log('WP Schedule Plugin: Added access_schemaplugin capability to administrator.'); // DEBUG
-	} else {
-		error_log('WP Schedule Plugin: ERROR - Could not get administrator role to add capability.'); // DEBUG
+	// Add only the "schema user" role for plugin access
+	if ( ! \get_role( 'schema_user' ) ) {
+		\add_role(
+			'schema_user',
+			'Schema User',
+			[] // No extra capabilities, all plugin permissions are handled in the custom table
+		);
+		error_log('WP Schedule Plugin: Created "schema user" role.');
 	}
 
-	// Placeholder: Add schema_user role logic here later if needed
+	// Remove any old plugin-specific roles/capabilities if present
+	// (No other plugin roles should exist; cleanup logic can be added here if needed)
 
 	// Flush rewrite rules to ensure REST API endpoints are recognized
 	\flush_rewrite_rules();
